@@ -21,7 +21,7 @@ import { PetStateMachine } from './core/PetStateMachine'
 import type { NormalizedEvent, SemanticState } from './core/types'
 import { createHarnessBridge, type HarnessBridge, type HarnessContext } from './integration/HarnessBridge'
 import { loadPosition, savePosition } from './persistence'
-import { loadPetAtlas } from './pets'
+import { loadPetAtlas, scanPets } from './pets'
 import { installPetSettings, type PetSettingsHandle, type PetSettingsRegistrar, type PetSettingsSnapshot } from './settings'
 import { PetWindow } from './renderer/PetWindow'
 import { selectBackend } from './renderer/backend/selectBackend'
@@ -65,7 +65,11 @@ export function apply(ctx: Context, config: PetConfig): void {
       petScale: config.petScale,
       petId: config.petId,
       hideWhenIdle: config.hideWhenIdle,
+      availablePets: [],
     }
+    // The catalog is a scan-time fact, not a user setting: remember it here so
+    // settings callbacks never adopt a stale/overridden `availablePets`.
+    let catalog: PetSettingsSnapshot['availablePets'] = []
     let loadedPetKey: string | null = null
     let reconcileSeq = 0
 
@@ -85,10 +89,22 @@ export function apply(ctx: Context, config: PetConfig): void {
       window?.setVisible(shouldBeVisible(state))
     }
 
+    /**
+     * Resolve the pet id to actually load. A persisted petId may reference a
+     * directory that has since been removed; fall back to the first available
+     * catalog entry instead of failing the whole renderer.
+     */
+    function effectivePetId(petId: string): string {
+      if (config.petPath) return petId
+      if (catalog.some(entry => entry.id === petId)) return petId
+      return catalog[0]?.id ?? 'text'
+    }
+
     /** Apply a resolved settings snapshot to the window (idempotent). */
     async function reconcile(settings: PetSettingsSnapshot): Promise<void> {
       const seq = ++reconcileSeq
-      const petKey = config.petPath ?? settings.petId
+      const petId = effectivePetId(settings.petId)
+      const petKey = config.petPath ?? petId
 
       if (window) {
         applyVisibility(machine?.state)
@@ -96,7 +112,7 @@ export function apply(ctx: Context, config: PetConfig): void {
         if (petKey !== loadedPetKey) {
           loadedPetKey = petKey
           try {
-            const atlas = await loadPetAtlas(settings.petId, config.petPath)
+            const atlas = await loadPetAtlas(petId, config.petPath)
             if (disposed || seq !== reconcileSeq) return
             await window.loadPet(atlas)
           } catch (error) {
@@ -110,7 +126,7 @@ export function apply(ctx: Context, config: PetConfig): void {
       loadedPetKey = petKey
       let atlas
       try {
-        atlas = await loadPetAtlas(settings.petId, config.petPath)
+        atlas = await loadPetAtlas(petId, config.petPath)
       } catch (error) {
         log.warn('failed to load pet assets; renderer disabled: %s', (error as Error)?.message ?? String(error))
         return
@@ -202,14 +218,22 @@ export function apply(ctx: Context, config: PetConfig): void {
     // Register the optional /pet debug command.
     unregisterCommand = registerPetCommand({ commands: petCtx.get('commands') } as never, debugHost)
 
+    // Scan the bundled pet directory synchronously so the catalog is part of
+    // the settings base snapshot registered below.
+    catalog = scanPets()
+    currentSettings.availablePets = catalog
+
     // Optional settings integration: wait for the settings service, then
     // register the namespace and react to committed changes.
     petCtx.inject(['settings'], (sctx) => {
       const registrar = sctx.get('settings') as PetSettingsRegistrar | undefined
       settingsHandle = installPetSettings(registrar, currentSettings, (settings) => {
         if (disposed) return
-        currentSettings = settings
-        void reconcile(settings).catch((error) => {
+        // `availablePets` is always the host's scan result, never whatever
+        // the settings round-trip resolved (a stale user layer must not
+        // shadow the directory facts). Everything else follows settings.
+        currentSettings = { ...settings, availablePets: catalog }
+        void reconcile(currentSettings).catch((error) => {
           log.warn('settings reconcile failed: %s', (error as Error)?.message ?? String(error))
         })
       })

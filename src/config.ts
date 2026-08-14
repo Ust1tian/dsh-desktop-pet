@@ -14,9 +14,13 @@
 
 import z from '@deepseek-ai/schemastery'
 
-/** Bundled pet ids shipped under `assets/pets/<id>/`. */
-export const BUNDLED_PET_IDS = ['blob', 'coral', 'sky', 'text'] as const
-export type PetId = (typeof BUNDLED_PET_IDS)[number]
+/** One entry in the runtime-scanned pet catalog. */
+export interface PetCatalogEntry {
+  /** Directory name under `assets/pets/<id>/` (also the pet id). */
+  id: string
+  /** Human label shown in the settings picker. */
+  displayName: string
+}
 
 /** Settings namespace name (spelled identically in the client package). */
 export const DESKTOP_PET_SETTINGS_NS = 'desktop-pet'
@@ -27,17 +31,27 @@ export interface PetSettings {
   enabled: boolean
   /** Integer scale multiplier applied to the 192×208 atlas cells. */
   petScale: number
-  /** Which bundled pet to display (ignored while `petPath` is set). */
-  petId: PetId
+  /** Which pet to display (a directory under `assets/pets/`, or a custom `petPath`). */
+  petId: string
   /** Hide the pet while no task is running; show it again on activity. */
   hideWhenIdle: boolean
+  /**
+   * The pets discovered under `assets/pets/` at startup. Read-only from the
+   * client's perspective: the host always replaces it with its own scan, so a
+   * user-layer value cannot shadow the directory facts.
+   */
+  availablePets: PetCatalogEntry[]
 }
 
 export const PetSettingsSchema: z<PetSettings> = z.object({
   enabled: z.boolean().default(true),
   petScale: z.number().step(0.25).min(0.5).max(4).default(1),
-  petId: z.union(BUNDLED_PET_IDS.map(id => z.const(id))).default('blob'),
+  petId: z.string().default('text'),
   hideWhenIdle: z.boolean().default(false),
+  availablePets: z.array(z.object({
+    id: z.string(),
+    displayName: z.string(),
+  })).default([]),
 })
 
 export interface PetConfig {
@@ -47,8 +61,8 @@ export interface PetConfig {
   alwaysOnTop: boolean
   /** Integer scale multiplier applied to the 192×208 atlas cells. */
   petScale: number
-  /** Which bundled pet to display (ignored while `petPath` is set). */
-  petId: PetId
+  /** Which pet to display (a directory under `assets/pets/`, or a custom `petPath`). */
+  petId: string
   /** Hide the pet while no task is running; show it again on activity. */
   hideWhenIdle: boolean
   /** Run the frame animation. When false, a single static frame is shown. */
@@ -71,7 +85,7 @@ export const Config: z<PetConfig> = z.object({
   enabled: z.boolean().default(true),
   alwaysOnTop: z.boolean().default(true),
   petScale: z.number().step(0.25).min(0.5).max(4).default(1),
-  petId: z.union(BUNDLED_PET_IDS.map(id => z.const(id))).default('blob'),
+  petId: z.string().default('text'),
   hideWhenIdle: z.boolean().default(false),
   animationEnabled: z.boolean().default(true),
   showStatusBubble: z.boolean().default(true),
@@ -86,7 +100,7 @@ export const DEFAULT_CONFIG: PetConfig = {
   enabled: true,
   alwaysOnTop: true,
   petScale: 1,
-  petId: 'blob',
+  petId: 'text',
   hideWhenIdle: false,
   animationEnabled: true,
   showStatusBubble: true,

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { installPetSettings } from '../src/settings'
 import { PetSettingsSchema, type PetSettings } from '../src/config'
 
-const base: PetSettings = { enabled: true, petScale: 1, petId: 'blob', hideWhenIdle: false }
+const base: PetSettings = { enabled: true, petScale: 1, petId: 'text', hideWhenIdle: false, availablePets: [] }
 
 function makeRegistrar() {
   const watchers = new Set<(next: PetSettings, prev: PetSettings) => void>()
@@ -51,8 +51,8 @@ describe('installPetSettings', () => {
     const onApply = vi.fn()
     installPetSettings(registrar, base, onApply)
     onApply.mockClear()
-    push({ enabled: false, petScale: 3, petId: 'sky', hideWhenIdle: true })
-    expect(onApply).toHaveBeenCalledWith({ enabled: false, petScale: 3, petId: 'sky', hideWhenIdle: true })
+    push({ enabled: false, petScale: 3, petId: 'text', hideWhenIdle: true, availablePets: [] })
+    expect(onApply).toHaveBeenCalledWith({ enabled: false, petScale: 3, petId: 'text', hideWhenIdle: true, availablePets: [] })
   })
 
   it('update() writes a partial patch back through the scope', async () => {
