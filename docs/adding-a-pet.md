@@ -1,28 +1,96 @@
-# Adding a Pet / 添加宠物
+# Adding a Pet
+
+English | [中文](adding-a-pet.zh.md)
 
 This guide explains how to add a new desktop pet to **dsh-desktop-pet**.
-本文说明如何向 **dsh-desktop-pet** 添加一个新的桌面宠物。
 
-A pet is just a directory containing two files that follow the Codex pet
-contract:
+A pet is a directory containing a manifest (`pet.json`) and a sprite sheet
+(`spritesheet.webp` or `spritesheet.png`). The plugin scans `assets/pets/` at
+startup and lists every discovered pet in the settings picker; it can also be
+pointed at an external directory via `petPath`.
 
-一个宠物就是一个目录，其中包含符合 Codex 宠物契约的两个文件：
+## Ways to add a pet
+
+Each method below has a **copy-paste prompt** for a coding agent, followed by
+**manual steps** you can follow yourself.
+
+### 1. Using hatch-pet
+
+**Prompt:**
 
 ```text
-assets/pets/<pet-id>/
-├── pet.json          # manifest (id / displayName / description / spritesheetPath)
-└── spritesheet.webp  # sprite atlas (lossless WebP or PNG)
+Run the hatch-pet skill to generate a pet, then copy the generated directory
+(pet.json + spritesheet.webp) into <plugin-dir>/assets/pets/<id>/ and restart
+the plugin so it appears in the settings pet picker.
 ```
 
----
+**Manual steps:**
 
-## The Codex pet contract / Codex 宠物契约
+1. Run the hatch-pet skill inside Codex (or a coding agent that ships it). The
+   generated directory lands in `~/.codex/pets/<name>/` and already contains
+   `pet.json` + `spritesheet.webp`.
+2. Copy that directory into `<plugin-dir>/assets/pets/<id>/`.
+3. Restart the plugin (restart Harness, or reload the plugin).
+4. Open **Settings → Plugins → Plugin configuration → Desktop pet** and pick the
+   new pet from the dropdown.
+
+### 2. Importing an existing folder
+
+**Prompt:**
+
+```text
+Copy the existing directory <source-dir> (containing pet.json and
+spritesheet.webp) into <plugin-dir>/assets/pets/<id>/, then restart the plugin
+so it appears in the settings pet picker.
+```
+
+**Manual steps:**
+
+1. Make sure `<source-dir>` contains `pet.json` and `spritesheet.webp` (or `.png`).
+2. Copy it into `<plugin-dir>/assets/pets/<id>/`. The directory name is the pet id.
+3. Restart the plugin.
+4. Pick the new pet from the settings dropdown.
+
+### 3. Using the Petdex community
+
+**Prompt:**
+
+```text
+Run "npx petdex install <slug>" to download a community pet, then copy the
+downloaded directory into <plugin-dir>/assets/pets/<slug>/ and restart the
+plugin so it appears in the pet picker.
+```
+
+**Manual steps:**
+
+1. Run `npx petdex install <slug>`. Petdex is a third-party community; the pet
+   downloads into `~/.codex/pets/<slug>/`.
+2. Copy that directory into `<plugin-dir>/assets/pets/<slug>/`.
+3. Restart the plugin.
+4. Pick the new pet from the settings dropdown.
+
+## Pet directory structure
+
+```text
+<plugin-dir>/assets/pets/<pet-id>/
+├── pet.json          # manifest (id / displayName / description / spritesheetPath)
+└── spritesheet.webp  # sprite sheet (lossless WebP or PNG)
+```
+
+> **Placeholders**
+> - `<plugin-dir>` — the directory of the installed `dsh-desktop-pet` package.
+> - `<pet-id>` / `<id>` / `<slug>` — the pet directory name (used as the pet id in the picker).
+> - `<source-dir>` — an existing directory that already contains the two files.
+
+## Asset format reference
+
+> Most users never create these files by hand — the tools above already produce
+> a directory in this format. This section is a reference for verifying or
+> hand-authoring an asset pack.
 
 ### `pet.json`
 
-Four fields, no `spriteVersionNumber`:
-
-四个字段，不含 `spriteVersionNumber`：
+Four fields:
 
 ```json
 {
@@ -35,19 +103,12 @@ Four fields, no `spriteVersionNumber`:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | Stable pet id. The directory name is used as the id in the picker; a `dsh-` prefix here is ignored. |
+| `id` | yes | Identifier field. The settings picker uses the **directory name** as the pet id. |
 | `displayName` | yes | Label shown in the settings pet picker. |
 | `description` | optional | Human description. |
 | `spritesheetPath` | yes | File name of the sprite sheet inside the same directory. |
 
-| 字段 | 是否必需 | 含义 |
-|---|---|---|
-| `id` | 是 | 稳定的宠物 id。下拉列表里实际使用目录名；这里的 `dsh-` 前缀会被忽略。 |
-| `displayName` | 是 | 设置页宠物下拉列表里显示的标签。 |
-| `description` | 可选 | 人类可读的描述。 |
-| `spritesheetPath` | 是 | 同目录下精灵图文件的文件名。 |
-
-### Sprite sheet / 精灵图
+### Sprite sheet
 
 | Property | Value |
 |---|---|
@@ -58,18 +119,7 @@ Four fields, no `spriteVersionNumber`:
 | Background | transparent |
 | Unused cells | fully transparent |
 
-| 属性 | 值 |
-|---|---|
-| 格式 | 无损 WebP（推荐）或 PNG |
-| 尺寸 | **1536 × 1872** px |
-| 网格 | **8 列 × 9 行** |
-| 单元格 | **192 × 208** px |
-| 背景 | 透明 |
-| 未使用单元格 | 完全透明 |
-
 Animation rows are fixed, in this exact order (row 0 at the top):
-
-动画行是固定的，顺序如下（第 0 行在最上方）：
 
 | Row | State | Frames |
 |---|---|---|
@@ -86,57 +136,17 @@ Animation rows are fixed, in this exact order (row 0 at the top):
 Frames are laid out row-major, left to right: frame `i` of row `r` occupies the
 cell at `x = i * 192`, `y = r * 208`.
 
-帧按行优先、从左到右排列：第 `r` 行第 `i` 帧位于 `x = i * 192`、`y = r * 208` 的单元格。
+## Notes
 
----
-
-## Adding a bundled pet / 添加内置宠物
-
-Drop the two files into `assets/pets/<pet-id>/` and **restart** the plugin. The
-pet is discovered automatically at startup and appears in the settings pet
-picker — no code change or rebuild is required.
-
-把两个文件放到 `assets/pets/<pet-id>/` 目录，然后**重启**插件。插件会在启动时自动发现该宠物，并在设置页的宠物下拉列表里显示——无需改代码或重新构建。
-
-```text
-assets/pets/
-└── my-pet/
-    ├── pet.json
-    └── spritesheet.webp
-```
-
----
-
-## Using an external pet / 使用外部宠物
-
-For a pet generated by the `hatch-pet` skill (or any directory following the
-same contract), set the `petPath` configuration to that directory. This takes
-precedence over the bundled `assets/pets/` catalog.
-
-对于 `hatch-pet` 技能生成的宠物（或任何遵循同一契约的目录），把 `petPath` 配置指向该目录。这优先于内置的 `assets/pets/` 目录。
-
-```yaml
-- insert:
-    - id: desktop-pet
-      name: dsh-desktop-pet
-      config:
-        petPath: '/absolute/path/to/my-hatch-pet'
-```
-
----
-
-## Notes / 注意事项
-
-- The pet is rendered with the fixed 9-state animation contract; a sprite sheet
-  that is narrower than 1536 px or shorter than 1872 px fails to load with a
-  clear error in the log.
+- The pet is rendered with the fixed 9-state animation format; a sprite sheet
+  narrower than 1536 px or shorter than 1872 px fails to load with a clear error
+  in the log.
 - A broken pet directory is skipped during scanning; the remaining pets still
   load, and the plugin falls back to the bundled `text` pet if nothing valid is
   found.
 - The bundled `text` pet is intentionally the only shipped pet. It renders each
   state as a distinct colour and label, which is useful for verifying that the
   pet's appearance follows the harness task state.
-
-- 宠物按固定的 9 状态动画契约渲染；宽度小于 1536 px 或高度小于 1872 px 的精灵图会在日志中明确报错。
-- 扫描时会跳过损坏的宠物目录；其余宠物仍能加载。若没有任何有效宠物，插件会回退到内置的 `text` 宠物。
-- 内置的 `text` 宠物是有意唯一随包发布的宠物。它用不同颜色和文字渲染每个状态，便于验证宠物外观是否跟随 harness 任务状态。
+- As an alternative to copying, `petPath` can point directly at an external
+  directory (for example a hatch-pet or Petdex output), which takes precedence
+  over the `assets/pets/` catalog.
