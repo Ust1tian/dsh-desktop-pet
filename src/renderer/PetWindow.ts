@@ -37,6 +37,8 @@ export interface PetWindowOptions {
   onHover?: () => void
   /** Invoked when the pointer leaves the pet. */
   onUnhover?: () => void
+  /** Invoked when the user chooses the context menu's "close pet" item. */
+  onClose?: () => void
 }
 
 const BASE_WIDTH = 192
@@ -60,6 +62,7 @@ export class PetWindow {
   private readonly onDrag: ((x: number, y: number) => void) | undefined
   private readonly onHover: (() => void) | undefined
   private readonly onUnhover: (() => void) | undefined
+  private readonly onClose: (() => void) | undefined
 
   private atlas: AtlasBuffer
   private scale: number
@@ -89,6 +92,7 @@ export class PetWindow {
     this.onDrag = options.onDrag
     this.onHover = options.onHover
     this.onUnhover = options.onUnhover
+    this.onClose = options.onClose
 
     const position = options.position ?? DEFAULT_POSITION
     this.currentX = position.x
@@ -122,6 +126,9 @@ export class PetWindow {
       },
       onUnhover: () => {
         this.onUnhover?.()
+      },
+      onClose: () => {
+        this.onClose?.()
       },
     }
     this.handle = await this.backend.create(opts)

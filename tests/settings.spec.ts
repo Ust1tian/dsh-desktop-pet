@@ -13,6 +13,11 @@ function makeRegistrar() {
       watchers.add(cb)
       return () => watchers.delete(cb)
     },
+    update: vi.fn(async (patch: Partial<PetSettings>) => {
+      current = { ...current, ...patch }
+      const prev = { ...current }
+      for (const cb of watchers) cb(current, prev)
+    }),
   }
   const registrar = {
     register: vi.fn((_ns: string, schema: unknown, _opts: unknown) => scope),
@@ -28,9 +33,9 @@ function makeRegistrar() {
 describe('installPetSettings', () => {
   it('applies the composition base when no registrar exists', () => {
     const onApply = vi.fn()
-    const dispose = installPetSettings(undefined, base, onApply)
+    const handle = installPetSettings(undefined, base, onApply)
     expect(onApply).toHaveBeenCalledWith(base)
-    dispose()
+    handle.dispose()
   })
 
   it('registers the namespace and applies resolved values on commit', () => {
@@ -48,5 +53,17 @@ describe('installPetSettings', () => {
     onApply.mockClear()
     push({ enabled: false, petScale: 3, petId: 'sky', hideWhenIdle: true })
     expect(onApply).toHaveBeenCalledWith({ enabled: false, petScale: 3, petId: 'sky', hideWhenIdle: true })
+  })
+
+  it('update() writes a partial patch back through the scope', async () => {
+    const { registrar, scope } = makeRegistrar()
+    const handle = installPetSettings(registrar, base, vi.fn())
+    await handle.update({ enabled: false })
+    expect(scope.update).toHaveBeenCalledWith({ enabled: false })
+  })
+
+  it('update() is a no-op without a registrar', () => {
+    const handle = installPetSettings(undefined, base, vi.fn())
+    expect(() => handle.update({ enabled: false })).not.toThrow()
   })
 })

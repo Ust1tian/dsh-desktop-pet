@@ -23,6 +23,8 @@ export type PetSettingsSnapshot = PetSettings
 export interface PetSettingsScope {
   get(): PetSettingsSnapshot
   watch(callback: (next: PetSettingsSnapshot, prev: PetSettingsSnapshot) => void | Promise<void>): () => void
+  /** Merge a partial patch into the user layer (settings-seam `update`). */
+  update(patch: Partial<PetSettingsSnapshot>): Promise<void> | void
 }
 
 /** The narrow settings-provider shape this plugin consumes. */
@@ -34,26 +36,38 @@ export interface PetSettingsRegistrar {
   ): PetSettingsScope
 }
 
+/** The handle returned by {@link installPetSettings}. */
+export interface PetSettingsHandle {
+  /** Stop reacting to settings changes (namespace ownership follows the provider). */
+  dispose(): void
+  /** Merge a partial patch into the user layer, or a no-op without a settings service. */
+  update(patch: Partial<PetSettingsSnapshot>): Promise<void> | void
+}
+
 /**
  * Install the settings wiring.
  *
  * @param registrar - the settings service (already resolved), or undefined.
  * @param base - the composition entry config, used as the namespace base layer.
  * @param onApply - invoked with each resolved settings snapshot.
- * @returns a disposer that stops reacting (namespace ownership follows the provider).
+ * @returns a handle to dispose the wiring and to write patches back.
  */
 export function installPetSettings(
   registrar: PetSettingsRegistrar | undefined,
   base: PetSettingsSnapshot,
   onApply: (settings: PetSettingsSnapshot) => void,
-): () => void {
+): PetSettingsHandle {
   if (!registrar) {
     onApply(base)
-    return () => {}
+    return { dispose: () => {}, update: () => {} }
   }
   const scope = registrar.register(DESKTOP_PET_SETTINGS_NS, PetSettingsSchema, { base })
   onApply(scope.get())
   // The registrar's watch passes (next, prev); onApply only cares about the
   // resolved next value, so narrow it to keep the callback signature stable.
-  return scope.watch((next) => onApply(next))
+  const dispose = scope.watch((next) => onApply(next))
+  return {
+    dispose,
+    update: (patch) => scope.update(patch),
+  }
 }

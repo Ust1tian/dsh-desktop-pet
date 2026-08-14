@@ -36,10 +36,19 @@ const WM_DESTROY = 0x0002
 const WM_EXITSIZEMOVE = 0x0232
 const WM_NCMOUSEMOVE = 0x00a0
 const WM_NCMOUSELEAVE = 0x02a2
+const WM_NCRBUTTONUP = 0x00a5
 const HTCAPTION = 2
 
 const TME_LEAVE = 0x00000002
 const TME_NONCLIENT = 0x00000010
+
+// Context-menu flags: return the selected item id instead of posting WM_COMMAND.
+const TPM_RETURNCMD = 0x0100
+const TPM_RIGHTBUTTON = 0x0002
+const TPM_NONOTIFY = 0x0080
+const MF_STRING = 0x0000
+/** Menu item id for the single "close pet" entry. */
+const MENU_ITEM_CLOSE = 1
 
 const SW_SHOWNOACTIVATE = 4
 const HWND_TOPMOST = -1
@@ -97,6 +106,11 @@ interface Win32Bindings {
   releaseDC: (...args: any[]) => number
   createWindowExW: (...args: any[]) => any
   trackMouseEvent: (...args: any[]) => number
+  createPopupMenu: (...args: any[]) => any
+  appendMenuW: (...args: any[]) => number
+  trackPopupMenu: (...args: any[]) => number
+  destroyMenu: (...args: any[]) => number
+  getCursorPos: (...args: any[]) => number
   TRACKMOUSEEVENT: any
   wndProc: unknown
   /** Updated on each `create()` so the single wndProc reports drags to the current window. */
@@ -105,6 +119,8 @@ interface Win32Bindings {
   currentOnHover: (() => void) | undefined
   /** Updated on each `create()` so the single wndProc reports hover-leave to the current window. */
   currentOnUnhover: (() => void) | undefined
+  /** Updated on each `create()` so the single wndProc reports the close choice. */
+  currentOnClose: (() => void) | undefined
 }
 
 async function loadKoffi(): Promise<Koffi> {
@@ -188,6 +204,11 @@ function getBindings(): Promise<Win32Bindings> {
     const dispatchMessageW = user32.func('__stdcall', 'DispatchMessageW', 'intptr', ['void *'])
     const getWindowRect = user32.func('__stdcall', 'GetWindowRect', 'int32', ['void *', 'void *'])
     const trackMouseEvent = user32.func('__stdcall', 'TrackMouseEvent', 'int32', ['void *'])
+    const createPopupMenu = user32.func('__stdcall', 'CreatePopupMenu', 'void *', [])
+    const appendMenuW = user32.func('__stdcall', 'AppendMenuW', 'int32', ['void *', 'uint32', 'uintptr', 'str16'])
+    const trackPopupMenu = user32.func('__stdcall', 'TrackPopupMenu', 'int32', ['void *', 'uint32', 'int32', 'int32', 'int32', 'void *', 'void *'])
+    const destroyMenu = user32.func('__stdcall', 'DestroyMenu', 'int32', ['void *'])
+    const getCursorPos = user32.func('__stdcall', 'GetCursorPos', 'int32', ['void *'])
 
     const TRACKMOUSEEVENT = koffi.struct('DshTrackMouseEvent', {
       cbSize: 'uint32',
@@ -202,11 +223,12 @@ function getBindings(): Promise<Win32Bindings> {
       updateLayeredWindow, setWindowPos, showWindow, destroyWindow, deleteObject, deleteDC,
       peekMessage: peekMessageW, translateMessage, dispatchMessage: dispatchMessageW, getWindowRect,
       createDibSection, createCompatibleDC, selectObject, getDC, releaseDC, createWindowExW,
-      trackMouseEvent, TRACKMOUSEEVENT,
+      trackMouseEvent, createPopupMenu, appendMenuW, trackPopupMenu, destroyMenu, getCursorPos, TRACKMOUSEEVENT,
       wndProc: undefined,
       currentOnDrag: undefined,
       currentOnHover: undefined,
       currentOnUnhover: undefined,
+      currentOnClose: undefined,
     }
 
     // Per-message scratch reused across all windows: the shared wndProc writes
@@ -235,6 +257,23 @@ function getBindings(): Promise<Win32Bindings> {
         }
         if (msg === WM_NCMOUSELEAVE) {
           bindings.currentOnUnhover?.()
+          return 0
+        }
+        if (msg === WM_NCRBUTTONUP) {
+          // Show a one-item "close pet" context menu at the cursor. We use
+          // TPM_RETURNCMD so no WM_COMMAND routing is needed, and MF_STRING with
+          // a UTF-16 label. The menu is destroyed immediately after.
+          const menu = createPopupMenu()
+          if (menu === null) return 0
+          const cursor = koffi.alloc(POINT, 1)
+          getCursorPos(cursor)
+          const p = koffi.decode(cursor, POINT)
+          appendMenuW(menu, MF_STRING, MENU_ITEM_CLOSE, 'Close pet')
+          const choice = trackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_RETURNCMD, p.x, p.y, 0, hwnd, null)
+          destroyMenu(menu)
+          if (choice === MENU_ITEM_CLOSE) {
+            bindings.currentOnClose?.()
+          }
           return 0
         }
         if (msg === WM_EXITSIZEMOVE) {
@@ -408,6 +447,7 @@ export class Win32Backend implements WindowBackend {
     b.currentOnDrag = options.onDrag
     b.currentOnHover = options.onHover
     b.currentOnUnhover = options.onUnhover
+    b.currentOnClose = options.onClose
 
     const exStyle = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | (options.clickThrough ? WS_EX_TRANSPARENT : 0)
     const hwnd = createWindowExW(

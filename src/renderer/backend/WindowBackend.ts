@@ -23,6 +23,8 @@ export interface WindowBackendOptions {
   onHover?: () => void
   /** Invoked when the pointer leaves the pet. */
   onUnhover?: () => void
+  /** Invoked when the user chooses the context menu's "close pet" item. */
+  onClose?: () => void
 }
 
 export interface WindowHandle {

@@ -22,7 +22,7 @@ import type { NormalizedEvent, SemanticState } from './core/types'
 import { createHarnessBridge, type HarnessBridge, type HarnessContext } from './integration/HarnessBridge'
 import { loadPosition, savePosition } from './persistence'
 import { loadPetAtlas } from './pets'
-import { installPetSettings, type PetSettingsRegistrar, type PetSettingsSnapshot } from './settings'
+import { installPetSettings, type PetSettingsHandle, type PetSettingsRegistrar, type PetSettingsSnapshot } from './settings'
 import { PetWindow } from './renderer/PetWindow'
 import { selectBackend } from './renderer/backend/selectBackend'
 
@@ -58,7 +58,7 @@ export function apply(ctx: Context, config: PetConfig): void {
     let unsubscribe: (() => void) | undefined
     let unregisterCommand: (() => void) | undefined
     let debugState: SemanticState | undefined
-    let disposeSettings: (() => void) | undefined
+    let settingsHandle: PetSettingsHandle | undefined
 
     let currentSettings: PetSettingsSnapshot = {
       enabled: config.enabled,
@@ -137,6 +137,16 @@ export function apply(ctx: Context, config: PetConfig): void {
           onDrag: (x, y) => savePosition({ x, y }),
           onHover: () => { window?.playJump() },
           onUnhover: () => { window?.endHover() },
+          onClose: () => {
+            // Persist "closed" through the settings seam when available, else
+            // hide in place. Either path stops the pet until re-enabled.
+            if (settingsHandle) {
+              void settingsHandle.update({ enabled: false })
+            } else {
+              currentSettings.enabled = false
+              applyVisibility(machine?.state)
+            }
+          },
         })
         await window.open()
         if (disposed) {
@@ -196,7 +206,7 @@ export function apply(ctx: Context, config: PetConfig): void {
     // register the namespace and react to committed changes.
     petCtx.inject(['settings'], (sctx) => {
       const registrar = sctx.get('settings') as PetSettingsRegistrar | undefined
-      disposeSettings = installPetSettings(registrar, currentSettings, (settings) => {
+      settingsHandle = installPetSettings(registrar, currentSettings, (settings) => {
         if (disposed) return
         currentSettings = settings
         void reconcile(settings).catch((error) => {
@@ -213,7 +223,7 @@ export function apply(ctx: Context, config: PetConfig): void {
     // Teardown (async so Cordis awaits window/native cleanup).
     return async () => {
       disposed = true
-      disposeSettings?.()
+      settingsHandle?.dispose()
       unsubscribe?.()
       unregisterCommand?.()
       machine?.dispose()
