@@ -13,7 +13,6 @@
         petId: text
         hideWhenIdle: false
         animationEnabled: true
-        showStatusBubble: true
         idleFrequencySec: 20
         clickThrough: false
         startSleeping: false

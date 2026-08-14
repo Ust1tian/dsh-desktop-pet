@@ -3,8 +3,10 @@
  *
  * Creates a frameless, transparent, always-on-top overlay using
  * `CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST ...)` + `UpdateLayeredWindow`,
- * and draws finished RGBA frames through a 32-bit DIB section. Dragging is
- * implemented with a `WM_NCHITTEST → HTCAPTION` window procedure.
+ * and draws finished RGBA frames through a 32-bit DIB section. Dragging is a
+ * manual `WM_NCLBUTTONDOWN → SetCapture → WM_MOUSEMOVE → WM_LBUTTONUP` loop so
+ * the JavaScript event loop stays free (the system's caption-drag modal loop
+ * would block animation timers and freeze the pet on its first drag frame).
  *
  * koffi is imported lazily so a non-Windows process never loads it. All koffi
  * types (structs, prototypes) and the window class are registered exactly once
@@ -33,7 +35,10 @@ const BI_RGB = 0
 
 const WM_NCHITTEST = 0x0084
 const WM_DESTROY = 0x0002
-const WM_EXITSIZEMOVE = 0x0232
+const WM_NCLBUTTONDOWN = 0x00a1
+const WM_NCLBUTTONUP = 0x00a2
+const WM_MOUSEMOVE = 0x0200
+const WM_LBUTTONUP = 0x0202
 const WM_NCMOUSEMOVE = 0x00a0
 const WM_NCMOUSELEAVE = 0x02a2
 const WM_NCRBUTTONUP = 0x00a5
@@ -106,6 +111,8 @@ interface Win32Bindings {
   releaseDC: (...args: any[]) => number
   createWindowExW: (...args: any[]) => any
   trackMouseEvent: (...args: any[]) => number
+  setCapture: (...args: any[]) => any
+  releaseCapture: (...args: any[]) => number
   createPopupMenu: (...args: any[]) => any
   appendMenuW: (...args: any[]) => number
   trackPopupMenu: (...args: any[]) => number
@@ -115,6 +122,16 @@ interface Win32Bindings {
   wndProc: unknown
   /** Updated on each `create()` so the single wndProc reports drags to the current window. */
   currentOnDrag: ((x: number, y: number) => void) | undefined
+  /** Updated on each `create()` so the single wndProc reports drag direction. */
+  currentOnDragMove: ((direction: 'left' | 'right') => void) | undefined
+  /** Updated on each `create()` so the single wndProc reports drag end. */
+  currentOnDragEnd: (() => void) | undefined
+  /** Manual-drag state (process-wide: one window is active at a time). */
+  dragActive: boolean
+  dragStartCursorX: number
+  dragStartCursorY: number
+  dragStartWinX: number
+  dragStartWinY: number
   /** Updated on each `create()` so the single wndProc reports hover to the current window. */
   currentOnHover: (() => void) | undefined
   /** Updated on each `create()` so the single wndProc reports hover-leave to the current window. */
@@ -204,6 +221,8 @@ function getBindings(): Promise<Win32Bindings> {
     const dispatchMessageW = user32.func('__stdcall', 'DispatchMessageW', 'intptr', ['void *'])
     const getWindowRect = user32.func('__stdcall', 'GetWindowRect', 'int32', ['void *', 'void *'])
     const trackMouseEvent = user32.func('__stdcall', 'TrackMouseEvent', 'int32', ['void *'])
+    const setCapture = user32.func('__stdcall', 'SetCapture', 'void *', ['void *'])
+    const releaseCapture = user32.func('__stdcall', 'ReleaseCapture', 'int32', [])
     const createPopupMenu = user32.func('__stdcall', 'CreatePopupMenu', 'void *', [])
     const appendMenuW = user32.func('__stdcall', 'AppendMenuW', 'int32', ['void *', 'uint32', 'uintptr', 'str16'])
     const trackPopupMenu = user32.func('__stdcall', 'TrackPopupMenu', 'int32', ['void *', 'uint32', 'int32', 'int32', 'int32', 'void *', 'void *'])
@@ -223,9 +242,16 @@ function getBindings(): Promise<Win32Bindings> {
       updateLayeredWindow, setWindowPos, showWindow, destroyWindow, deleteObject, deleteDC,
       peekMessage: peekMessageW, translateMessage, dispatchMessage: dispatchMessageW, getWindowRect,
       createDibSection, createCompatibleDC, selectObject, getDC, releaseDC, createWindowExW,
-      trackMouseEvent, createPopupMenu, appendMenuW, trackPopupMenu, destroyMenu, getCursorPos, TRACKMOUSEEVENT,
+      trackMouseEvent, setCapture, releaseCapture, createPopupMenu, appendMenuW, trackPopupMenu, destroyMenu, getCursorPos, TRACKMOUSEEVENT,
       wndProc: undefined,
       currentOnDrag: undefined,
+      currentOnDragMove: undefined,
+      currentOnDragEnd: undefined,
+      dragActive: false,
+      dragStartCursorX: 0,
+      dragStartCursorY: 0,
+      dragStartWinX: 0,
+      dragStartWinY: 0,
       currentOnHover: undefined,
       currentOnUnhover: undefined,
       currentOnClose: undefined,
@@ -235,6 +261,7 @@ function getBindings(): Promise<Win32Bindings> {
     // into these instead of allocating on every mouse-move / drag-end.
     const tme = koffi.alloc(TRACKMOUSEEVENT, 1)
     const rect = koffi.alloc(RECT, 1)
+    const point = koffi.alloc(POINT, 1)
 
     // --- Single window class + procedure (registered once) ----------------
     const wndProcType = koffi.proto('intptr __stdcall DshPetWndProc(void *hwnd, uint32 msg, uintptr wParam, intptr lParam)')
@@ -242,6 +269,45 @@ function getBindings(): Promise<Win32Bindings> {
       (hwnd: any, msg: number, wParam: number, lParam: number) => {
         if (msg === WM_NCHITTEST) return HTCAPTION
         if (msg === WM_DESTROY) return 0
+        if (msg === WM_NCLBUTTONDOWN) {
+          // Begin a manual drag: capture the mouse so moves keep arriving even
+          // outside the small window, and record the start positions.
+          getCursorPos(point)
+          const p = koffi.decode(point, POINT)
+          getWindowRect(hwnd, rect)
+          const r = koffi.decode(rect, RECT)
+          bindings.dragStartCursorX = p.x
+          bindings.dragStartCursorY = p.y
+          bindings.dragStartWinX = r.left
+          bindings.dragStartWinY = r.top
+          bindings.dragActive = true
+          setCapture(hwnd)
+          return 0
+        }
+        if (msg === WM_MOUSEMOVE) {
+          if (bindings.dragActive) {
+            getCursorPos(point)
+            const p = koffi.decode(point, POINT)
+            const dx = p.x - bindings.dragStartCursorX
+            const dy = p.y - bindings.dragStartCursorY
+            if (dx !== 0 || dy !== 0) {
+              setWindowPos(hwnd, HWND_TOPMOST, bindings.dragStartWinX + dx, bindings.dragStartWinY + dy, 0, 0, 0x0001 | 0x0010)
+              if (dx !== 0) bindings.currentOnDragMove?.(dx < 0 ? 'left' : 'right')
+            }
+          }
+          return 0
+        }
+        if (msg === WM_LBUTTONUP || msg === WM_NCLBUTTONUP) {
+          if (bindings.dragActive) {
+            bindings.dragActive = false
+            releaseCapture()
+            getWindowRect(hwnd, rect)
+            const r = koffi.decode(rect, RECT)
+            bindings.currentOnDragEnd?.()
+            bindings.currentOnDrag?.(r.left, r.top)
+          }
+          return 0
+        }
         if (msg === WM_NCMOUSEMOVE) {
           // Ask Windows to post WM_NCMOUSELEAVE when the cursor leaves, then
           // report the hover (rate-limiting happens in the pet core).
@@ -265,21 +331,14 @@ function getBindings(): Promise<Win32Bindings> {
           // a UTF-16 label. The menu is destroyed immediately after.
           const menu = createPopupMenu()
           if (menu === null) return 0
-          const cursor = koffi.alloc(POINT, 1)
-          getCursorPos(cursor)
-          const p = koffi.decode(cursor, POINT)
+          getCursorPos(point)
+          const p = koffi.decode(point, POINT)
           appendMenuW(menu, MF_STRING, MENU_ITEM_CLOSE, 'Close pet')
           const choice = trackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_RETURNCMD, p.x, p.y, 0, hwnd, null)
           destroyMenu(menu)
           if (choice === MENU_ITEM_CLOSE) {
             bindings.currentOnClose?.()
           }
-          return 0
-        }
-        if (msg === WM_EXITSIZEMOVE) {
-          getWindowRect(hwnd, rect)
-          const r = koffi.decode(rect, RECT)
-          bindings.currentOnDrag?.(r.left, r.top)
           return 0
         }
         return defWindowProcW(hwnd, msg, wParam, lParam)
@@ -445,6 +504,9 @@ export class Win32Backend implements WindowBackend {
     const { koffi, createWindowExW, createDibSection, createCompatibleDC, selectObject, getDC, releaseDC, BITMAPINFOHEADER } = b
 
     b.currentOnDrag = options.onDrag
+    b.currentOnDragMove = options.onDragMove
+    b.currentOnDragEnd = options.onDragEnd
+    b.dragActive = false
     b.currentOnHover = options.onHover
     b.currentOnUnhover = options.onUnhover
     b.currentOnClose = options.onClose

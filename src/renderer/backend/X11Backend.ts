@@ -3,8 +3,8 @@
  *
  * Creates a borderless, override-redirect, 32-bit-ARGB window with
  * `_NET_WM_WINDOW_TYPE_DOCK` / `_NET_WM_STATE_ABOVE` hints and pushes finished
- * RGBA frames with `xcb_put_image`. Dragging uses `xcb_configure_window` on
- * button/motion events.
+ * RGBA frames with `xcb_put_image`. Dragging uses `xcb_configure_window` driven
+ * by button/motion events, reporting horizontal direction on the way.
  *
  * Constraints (documented in the README):
  *   - per-pixel transparency requires a running compositor;
@@ -24,12 +24,12 @@ interface KoffiLibrary {
 interface Koffi {
   load(path: string): KoffiLibrary
   pointer(type: any): any
-  proto(declaration: string): any
-  register(fn: (...args: any[]) => any, type: any): any
-  unregister(handle: any): void
-  sizeof(type: string): number
-  view(address: any, length: number): ArrayBuffer
+  struct(name: string, fields: Record<string, string>): any
+  alloc(type: any, count: number): any
+  encode(address: any, type: any, value: any): void
   decode(address: any, type: any, ...rest: any[]): any
+  sizeof(type: any): number
+  view(address: any, length: number): ArrayBuffer
 }
 
 async function loadKoffi(): Promise<Koffi> {
@@ -37,32 +37,66 @@ async function loadKoffi(): Promise<Koffi> {
   return (mod.default ?? mod) as unknown as Koffi
 }
 
+// xcb_create_window value-mask bits (value_list order follows bit order).
+const XCB_CW_BACK_PIXEL = 0x00000001 // 1 << 0
+const XCB_CW_OVERRIDE_REDIRECT = 0x00000200 // 1 << 9
+const XCB_CW_EVENT_MASK = 0x00000800 // 1 << 11
+
 const XCB_EVENT_MASK_BUTTON_PRESS = 0x00000004
 const XCB_EVENT_MASK_BUTTON_RELEASE = 0x00000008
 const XCB_EVENT_MASK_POINTER_MOTION = 0x00000040
-const XCB_EVENT_MASK_EXPOSURE = 0x00008000
-const XCB_EVENT_MASK_STRUCTURE_NOTIFY = 0x00020000
+const XCB_POINTER_EVENT_MASK = XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION
 
 const XCB_WINDOW_CLASS_INPUT_OUTPUT = 1
-const XCB_COPY_FROM_PARENT = 0
-const XCB_OVERRIDE_REDIRECT = 2 // value-mask bit 1 << 1
 
 const XCB_IMAGE_FORMAT_Z_PIXMAP = 2
 const XCB_PROP_MODE_REPLACE = 0
-const XCB_ATOM_WINDOW = 33
 const XCB_ATOM_ATOM = 4
-const XCB_ATOM_CARDINAL = 6
+
+// xcb_configure_window value-mask bits for X/Y.
+const XCB_CONFIG_WINDOW_X = 0x0001
+const XCB_CONFIG_WINDOW_Y = 0x0002
+
+// Core pointer-event response codes.
+const XCB_BUTTON_PRESS = 4
+const XCB_BUTTON_RELEASE = 5
+const XCB_MOTION_NOTIFY = 6
+
+/** Shared leading layout of button-press / button-release / motion-notify events. */
+interface XcbPointerEvent {
+  response_type: number
+  detail: number
+  sequence: number
+  time: number
+  root: number
+  event: number
+  child: number
+  root_x: number
+  root_y: number
+  event_x: number
+  event_y: number
+  state: number
+}
 
 class X11Handle implements WindowHandle {
   private destroyed = false
   private pumpTimer: ReturnType<typeof setInterval> | undefined
   private readonly atomCache = new Map<string, number>()
 
+  // Drag state: the window position is tracked in JS (started from the create
+  // options), while root coordinates come from the pointer events.
+  private winX: number
+  private winY: number
+  private dragging = false
+  private dragStartRootX = 0
+  private dragStartRootY = 0
+  private dragStartWinX = 0
+  private dragStartWinY = 0
+
   constructor(
     private readonly koffi: Koffi,
     private readonly conn: any,
     private readonly window: number,
-    private readonly screen: number,
     private readonly depth: number,
     private readonly width: number,
     private readonly height: number,
@@ -76,9 +110,20 @@ class X11Handle implements WindowHandle {
     private readonly destroyWindow: (...args: any[]) => number,
     private readonly pollEvent: (...args: any[]) => any,
     private readonly getImageBuffer: (frame: PetFrame) => Uint8Array,
+    private readonly pointerEventType: any,
     private readonly onDrag: ((x: number, y: number) => void) | undefined,
+    private readonly onDragMove: ((direction: 'left' | 'right') => void) | undefined,
+    private readonly onDragEnd: (() => void) | undefined,
   ) {
-    void this.screen
+    void this.width
+    void this.height
+    this.winX = 0
+    this.winY = 0
+  }
+
+  setInitialPosition(x: number, y: number): void {
+    this.winX = x
+    this.winY = y
   }
 
   private async atom(name: string): Promise<number> {
@@ -96,14 +141,8 @@ class X11Handle implements WindowHandle {
     const above = await this.atom('_NET_WM_STATE_ABOVE')
     const sticky = await this.atom('_NET_WM_STATE_STICKY')
 
-    // Build two uint32 arrays; koffi's fixed array type is adequate for 4-byte atoms.
-    const atoms = this.koffi.pointer('uint32')
-    void atoms
-    // XCB atoms are uint32_t; we pass them packed below via changeProperty's data.
     const typeArray = [dock, 0]
     const stateArray = [above, sticky, 0]
-    void typeArray
-    void stateArray
     this.changeProperty(this.conn, XCB_PROP_MODE_REPLACE, this.window, windowType, XCB_ATOM_ATOM, 32, typeArray.length, typeArray)
     this.changeProperty(this.conn, XCB_PROP_MODE_REPLACE, this.window, state, XCB_ATOM_ATOM, 32, stateArray.length, stateArray)
   }
@@ -117,12 +156,13 @@ class X11Handle implements WindowHandle {
 
   move(x: number, y: number): void {
     if (this.destroyed) return
-    this.configureWindow(this.conn, this.window, 0x0001 | 0x0002, [x, y])
+    this.winX = x
+    this.winY = y
+    this.configureWindow(this.conn, this.window, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, [x, y])
     this.flush(this.conn)
   }
 
   setAlwaysOnTop(): void {
-    // Override-redirect windows are self-stacked; re-raise on next present.
     this.flush(this.conn)
   }
 
@@ -146,6 +186,41 @@ class X11Handle implements WindowHandle {
     this.flush(this.conn)
   }
 
+  private handleEvent(event: any): void {
+    const evt = this.koffi.decode(event, this.pointerEventType) as XcbPointerEvent
+    switch (evt.response_type) {
+      case XCB_BUTTON_PRESS: {
+        this.dragging = true
+        this.dragStartRootX = evt.root_x
+        this.dragStartRootY = evt.root_y
+        this.dragStartWinX = this.winX
+        this.dragStartWinY = this.winY
+        break
+      }
+      case XCB_MOTION_NOTIFY: {
+        if (!this.dragging) break
+        const dx = evt.root_x - this.dragStartRootX
+        const dy = evt.root_y - this.dragStartRootY
+        if (dx === 0 && dy === 0) break
+        const x = this.dragStartWinX + dx
+        const y = this.dragStartWinY + dy
+        this.winX = x
+        this.winY = y
+        this.configureWindow(this.conn, this.window, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, [x, y])
+        this.flush(this.conn)
+        if (dx !== 0) this.onDragMove?.(dx < 0 ? 'left' : 'right')
+        break
+      }
+      case XCB_BUTTON_RELEASE: {
+        if (!this.dragging) break
+        this.dragging = false
+        this.onDragEnd?.()
+        this.onDrag?.(this.winX, this.winY)
+        break
+      }
+    }
+  }
+
   startPump(): void {
     if (this.pumpTimer || this.destroyed) return
     this.pumpTimer = setInterval(() => {
@@ -153,9 +228,7 @@ class X11Handle implements WindowHandle {
       let event: any
       let guard = 0
       while (guard++ < 8 && (event = this.pollEvent(this.conn))) {
-        // Event handling (drag) is intentionally minimal; see README note on
-        // dragging for the X11 backend.
-        this.koffi.decode(event, 'uint8') // read the response type byte (no-op safeguard)
+        this.handleEvent(event)
       }
     }, 50)
   }
@@ -173,10 +246,9 @@ export class X11Backend implements WindowBackend {
     const lib = koffi.load('libxcb.so.1')
 
     const connect = lib.func('cdecl', 'xcb_connect', 'void *', ['str', 'void *'])
-    const setup = lib.func('cdecl', 'xcb_get_setup', 'void *', ['void *'])
     const generateId = lib.func('cdecl', 'xcb_generate_id', 'uint32', ['void *'])
     const createWindow = lib.func('cdecl', 'xcb_create_window', 'uint32', [
-      'void *', 'uint8', 'uint32', 'uint32', 'int16', 'int16', 'uint16', 'uint16', 'uint16', 'uint16', 'uint32', 'uint32', 'uint32',
+      'void *', 'uint8', 'uint32', 'uint32', 'int16', 'int16', 'uint16', 'uint16', 'uint16', 'uint16', 'uint32', 'uint32', 'void *',
     ])
     const internAtom = lib.func('cdecl', 'xcb_intern_atom', 'uint32', ['void *', 'uint8', 'uint16', 'str'])
     const changeProperty = lib.func('cdecl', 'xcb_change_property', 'uint32', ['void *', 'uint8', 'uint32', 'uint32', 'uint32', 'uint8', 'uint32', 'void *'])
@@ -190,16 +262,31 @@ export class X11Backend implements WindowBackend {
     const pollEvent = lib.func('cdecl', 'xcb_poll_for_event', 'void *', ['void *'])
     const destroyWindow = lib.func('cdecl', 'xcb_destroy_window', 'uint32', ['void *', 'uint32'])
 
-    const conn = connect(null, null)
-    // We use a fixed 32-bit depth; on most composited desktops the default
-    // screen's root has a 32-bit TrueColor visual available.
-    const root = koffi.decode(setup(conn), 'uint32') // best-effort; refined below
-    void root
+    const pointerEventType = koffi.struct('DshXcbPointerEvent', {
+      response_type: 'uint8',
+      detail: 'uint8',
+      sequence: 'uint16',
+      time: 'uint32',
+      root: 'uint32',
+      event: 'uint32',
+      child: 'uint32',
+      root_x: 'int16',
+      root_y: 'int16',
+      event_x: 'int16',
+      event_y: 'int16',
+      state: 'uint16',
+      same_screen: 'uint8',
+      pad0: 'uint8',
+    })
 
+    const conn = connect(null, null)
     const window = generateId(conn) as number
 
-    const valueMask = 1 | XCB_OVERRIDE_REDIRECT // CWBackPixel (transparent) + override_redirect
-    const values = [0, 1]
+    // value_list order follows the value-mask bit order: back_pixel, then
+    // override_redirect, then event_mask.
+    const valueMask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK
+    const values = koffi.alloc('uint32', 3)
+    koffi.encode(values, koffi.pointer('uint32'), [0, 1, XCB_POINTER_EVENT_MASK])
 
     createWindow(
       conn,
@@ -209,17 +296,21 @@ export class X11Backend implements WindowBackend {
       options.x, options.y, options.width, options.height,
       0, // border width
       XCB_WINDOW_CLASS_INPUT_OUTPUT,
-      0, // visual (0 = CopyFromParent; ARGB requires a matched visual, see note)
+      0, // visual (0 = CopyFromParent; ARGB needs a matched 32-bit visual)
       valueMask, values,
     )
 
     const handle = new X11Handle(
-      koffi, conn, window, 0, 32, options.width, options.height,
+      koffi, conn, window, 32, options.width, options.height,
       internAtom, changeProperty, putImage, configureWindow, flush, mapWindow, unmapWindow, destroyWindow,
       pollEvent,
       this.bgraFor32bit.bind(this),
+      pointerEventType,
       options.onDrag,
+      options.onDragMove,
+      options.onDragEnd,
     )
+    handle.setInitialPosition(options.x, options.y)
     await handle.applyHints()
     handle.show()
     handle.startPump()

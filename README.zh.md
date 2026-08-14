@@ -9,7 +9,6 @@
 - **插件优先**：就是一个普通的 deepseek-harness 插件——没有独立启动的守护进程、浏览器或桌面应用。
 - **零网络**：所有资源随插件发布；无遥测、无 CDN、无远程服务。
 - **零额外 LLM 成本**：事件 → 状态的解析完全确定，不额外调用模型。
-- **隐私优先**：只渲染很短的固定标签（`Working…`、`Done` 等），绝不显示提示词、代码、密钥、工具输出或对话内容。
 - **运行时发现宠物**：`assets/pets/` 下的宠物在启动时自动发现，添加宠物就是放进一个文件夹——无需重新构建。
 
 ---
@@ -111,7 +110,6 @@ Linux 的逐像素透明需要一个运行中的合成器（GNOME/KDE 默认自�
 | `petId` | `text` | 显示哪个宠物（即 `assets/pets/` 下的目录名）。 |
 | `hideWhenIdle` | `false` | 宠物睡眠（无任务）时自动隐藏，有任务时重新显示。 |
 | `animationEnabled` | `true` | 运行动画（为 false 时显示静态帧）。 |
-| `showStatusBubble` | `true` | 在宠物下方显示简短状态标签。 |
 | `idleFrequencySec` | `20` | 随机空闲动作间隔秒数（≥8）。 |
 | `clickThrough` | `false` | 让指针事件穿透（仅 Windows）。 |
 | `startSleeping` | `false` | 以睡眠状态启动。 |
@@ -127,7 +125,6 @@ Linux 的逐像素透明需要一个运行中的合成器（GNOME/KDE 默认自�
         petScale: 1
         petId: text
         idleFrequencySec: 30
-        showStatusBubble: true
 ```
 
 窗口位置私下持久化在 `~/.dsh/desktop-pet/position.json`（尽力而为，失败忽略），不依赖任何 Harness 存储服务。
@@ -158,7 +155,7 @@ integration/  HarnessBridge · capability-detection · event-mapping
         ↓  NormalizedEvent
 core/         PetStateResolver · PetStateMachine · TaskStateRegistry
         ↓  SemanticState
-renderer/     AnimationController · PetWindow · StatusBubble
+renderer/     AnimationController · PetWindow
         ↓  最终 RGBA 帧
 renderer/backend/  Win32Backend · X11Backend   （基于 koffi 的原生悬浮层）
         ↑

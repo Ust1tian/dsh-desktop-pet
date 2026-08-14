@@ -19,6 +19,10 @@ export interface WindowBackendOptions {
   clickThrough?: boolean
   /** Invoked after the user drags the window to a new position. */
   onDrag?: (x: number, y: number) => void
+  /** Invoked repeatedly during a drag with the horizontal direction. */
+  onDragMove?: (direction: 'left' | 'right') => void
+  /** Invoked when a drag ends. */
+  onDragEnd?: () => void
   /** Invoked when the pointer hovers over the pet (rate-limited by the backend). */
   onHover?: () => void
   /** Invoked when the pointer leaves the pet. */

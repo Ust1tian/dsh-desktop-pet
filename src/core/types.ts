@@ -73,17 +73,3 @@ export const SEMANTIC_TO_CODEX: Readonly<Record<SemanticState, CodexPetState>> =
   ERROR: 'failed',
   SLEEPING: 'idle',
 }
-
-/** A short, privacy-safe status label for each semantic state. */
-export const STATUS_BUBBLE: Readonly<Record<SemanticState, string>> = {
-  STARTING: 'Waking up…',
-  IDLE: '',
-  THINKING: 'Thinking…',
-  WORKING: 'Working…',
-  CODING: 'Coding…',
-  RUNNING_COMMAND: 'Running…',
-  WAITING_FOR_USER: 'Waiting for you…',
-  SUCCESS: 'Done',
-  ERROR: 'Error',
-  SLEEPING: 'Sleeping…',
-}

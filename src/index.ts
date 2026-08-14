@@ -144,7 +144,6 @@ export function apply(ctx: Context, config: PetConfig): void {
           atlas,
           scale: settings.petScale,
           alwaysOnTop: config.alwaysOnTop,
-          showStatusBubble: config.showStatusBubble,
           animationEnabled: config.animationEnabled,
           idleFrequencySec: config.idleFrequencySec,
           clickThrough: config.clickThrough,

@@ -1,7 +1,7 @@
 /**
  * The renderer's orchestrator: owns a {@link WindowBackend} handle and an
  * {@link AnimationController}, maps semantic states to Codex poses, and feeds
- * finished frames (pet + optional status bubble) into the window.
+ * finished frames into the window.
  *
  * Idle "alive" behavior lives here: when idle, a low-frequency randomized
  * transient (a wave or hop) plays so the pet never looks frozen, without
@@ -13,9 +13,8 @@
  */
 
 import type { CodexPetState, SemanticState } from '../core/types'
-import { SEMANTIC_TO_CODEX, STATUS_BUBBLE } from '../core/types'
+import { SEMANTIC_TO_CODEX } from '../core/types'
 import { AnimationController, type AnimationClock } from './AnimationController'
-import { compositeStatusBubble } from './StatusBubble'
 import type { AtlasBuffer } from './FrameDecoder'
 import type { WindowBackend, WindowBackendOptions, WindowHandle } from './backend/WindowBackend'
 
@@ -24,7 +23,6 @@ export interface PetWindowOptions {
   atlas: AtlasBuffer
   scale: number
   alwaysOnTop: boolean
-  showStatusBubble: boolean
   animationEnabled: boolean
   /** Seconds between idle variations (transient wave/hop). */
   idleFrequencySec: number
@@ -33,6 +31,10 @@ export interface PetWindowOptions {
   clock?: AnimationClock
   random?: () => number
   onDrag?: (x: number, y: number) => void
+  /** Invoked repeatedly during a drag with the horizontal direction. */
+  onDragMove?: (direction: 'left' | 'right') => void
+  /** Invoked when a drag ends. */
+  onDragEnd?: () => void
   /** Invoked when the pointer hovers over the pet (backend rate-limits it). */
   onHover?: () => void
   /** Invoked when the pointer leaves the pet. */
@@ -43,23 +45,20 @@ export interface PetWindowOptions {
 
 const BASE_WIDTH = 192
 const BASE_HEIGHT = 208
-/** Extra vertical rows reserved for the status bubble, so the window DIB is
- *  tall enough for every rendered frame (a frame taller than the DIB made
- *  `UpdateLayeredWindow` fail and freeze the pet on the last good frame). */
-const BUBBLE_RESERVE = 24
 const DEFAULT_POSITION = { x: 40, y: 40 } as const
 // `jumping` is reserved for pointer-hover; idle variations use only `waving`.
 const IDLE_TRANSIENTS: readonly CodexPetState[] = ['waving']
 
 export class PetWindow {
   private readonly backend: WindowBackend
-  private readonly showStatusBubble: boolean
   private readonly animationEnabled: boolean
   private readonly idleFrequencySec: number
   private readonly clickThrough: boolean
   private readonly clock: AnimationClock
   private readonly random: () => number
   private readonly onDrag: ((x: number, y: number) => void) | undefined
+  private readonly onDragMove: ((direction: 'left' | 'right') => void) | undefined
+  private readonly onDragEnd: (() => void) | undefined
   private readonly onHover: (() => void) | undefined
   private readonly onUnhover: (() => void) | undefined
   private readonly onClose: (() => void) | undefined
@@ -73,23 +72,24 @@ export class PetWindow {
   private controller: AnimationController | undefined
   private idleTimer: unknown | undefined
   private semantic: SemanticState = 'IDLE'
-  private statusText = ''
   private visible = true
   private opened = false
   private destroyed = false
   private hovered = false
+  private dragging = false
 
   constructor(options: PetWindowOptions) {
     this.backend = options.backend
     this.atlas = options.atlas
     this.scale = options.scale
-    this.showStatusBubble = options.showStatusBubble
     this.animationEnabled = options.animationEnabled
     this.idleFrequencySec = options.idleFrequencySec
     this.clickThrough = options.clickThrough ?? false
     this.clock = options.clock ?? { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) }
     this.random = options.random ?? Math.random
     this.onDrag = options.onDrag
+    this.onDragMove = options.onDragMove
+    this.onDragEnd = options.onDragEnd
     this.onHover = options.onHover
     this.onUnhover = options.onUnhover
     this.onClose = options.onClose
@@ -105,9 +105,7 @@ export class PetWindow {
     this.opened = true
 
     const width = Math.max(1, Math.round(BASE_WIDTH * this.scale))
-    // Reserve the bubble strip up front so the window DIB always fits the
-    // composed frame (pet + optional status bubble).
-    const height = Math.max(1, Math.round((BASE_HEIGHT + (this.showStatusBubble ? BUBBLE_RESERVE : 0)) * this.scale))
+    const height = Math.max(1, Math.round(BASE_HEIGHT * this.scale))
 
     const opts: WindowBackendOptions = {
       width,
@@ -120,6 +118,12 @@ export class PetWindow {
         this.currentX = x
         this.currentY = y
         this.onDrag?.(x, y)
+      },
+      onDragMove: (direction) => {
+        this.beginDrag(direction)
+      },
+      onDragEnd: () => {
+        this.endDrag()
       },
       onHover: () => {
         this.onHover?.()
@@ -144,12 +148,34 @@ export class PetWindow {
     if (!this.visible) this.handle.hide()
   }
 
+  /** The current renderer pose (for diagnostics/tests). */
+  get currentPose(): CodexPetState | undefined {
+    return this.controller?.currentState
+  }
+
   /** Set the semantic state; the pose is derived, not caller-decided. */
   setState(state: SemanticState): void {
     this.semantic = state
-    this.statusText = STATUS_BUBBLE[state] ?? ''
     if (!this.controller || this.destroyed) return
+    // While dragging, defer the pose switch so it does not interrupt the
+    // direction animation; endDrag applies the latest semantic state.
+    if (this.dragging) return
     this.applyState(state)
+  }
+
+  /** Enter the drag animation, playing the direction pose. */
+  private beginDrag(direction: 'left' | 'right'): void {
+    if (this.destroyed || !this.controller) return
+    this.dragging = true
+    this.cancelIdleVariation()
+    this.controller.setState(direction === 'left' ? 'running-left' : 'running-right')
+  }
+
+  /** Exit the drag animation and return to the current semantic pose. */
+  private endDrag(): void {
+    if (this.destroyed || !this.controller) return
+    this.dragging = false
+    this.applyState(this.semantic)
   }
 
   /** Show or hide the pet without disposing it. */
@@ -230,16 +256,8 @@ export class PetWindow {
 
   private present(frame: import('./FrameDecoder').PetFrame): void {
     if (this.destroyed || !this.handle) return
-    // The window is always created with the bubble strip reserved, so compose
-    // into the full window size every frame (idle leaves the strip transparent;
-    // active states draw the label into it). This keeps the frame dimensions
-    // equal to the DIB dimensions, so UpdateLayeredWindow never fails.
-    const windowWidth = Math.max(1, Math.round(BASE_WIDTH * this.scale))
-    const windowHeight = Math.max(1, Math.round((BASE_HEIGHT + (this.showStatusBubble ? BUBBLE_RESERVE : 0)) * this.scale))
-    const text = this.showStatusBubble ? this.statusText : ''
-    const rendered = compositeStatusBubble(frame, text, windowWidth, windowHeight)
     try {
-      this.handle.present(rendered)
+      this.handle.present(frame)
     } catch {
       // A failed frame must not propagate into the harness. Swallow and keep
       // the loop; the next frame may succeed.

@@ -67,8 +67,6 @@ export interface PetConfig {
   hideWhenIdle: boolean
   /** Run the frame animation. When false, a single static frame is shown. */
   animationEnabled: boolean
-  /** Show the short status bubble under the pet. */
-  showStatusBubble: boolean
   /** Seconds (>=8) between randomized idle variations. */
   idleFrequencySec: number
   /** Pass pointer events through the window (Windows only). */
@@ -86,7 +84,6 @@ export const Config: z<PetConfig> = z.object({
   petId: z.string().default('text'),
   hideWhenIdle: z.boolean().default(false),
   animationEnabled: z.boolean().default(true),
-  showStatusBubble: z.boolean().default(true),
   idleFrequencySec: z.natural().min(8).default(20),
   clickThrough: z.boolean().default(false),
   startSleeping: z.boolean().default(false),
@@ -100,7 +97,6 @@ export const DEFAULT_CONFIG: PetConfig = {
   petId: 'text',
   hideWhenIdle: false,
   animationEnabled: true,
-  showStatusBubble: true,
   idleFrequencySec: 20,
   clickThrough: false,
   startSleeping: false,

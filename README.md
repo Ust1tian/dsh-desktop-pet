@@ -9,7 +9,6 @@ It is **not** a second chat UI, a task manager, or a full desktop app. It is a s
 - **Plugin-first**: a normal deepseek-harness plugin — no separately launched daemon, browser, or desktop app.
 - **Zero network**: all assets ship with the plugin; no telemetry, CDN, or remote service.
 - **Zero added LLM cost**: event → state resolution is fully deterministic.
-- **Privacy-first**: it only ever renders short fixed labels (`Working…`, `Done`, …). It never shows prompts, code, secrets, tool output, or conversation content.
 - **Runtime-discovered pets**: pets under `assets/pets/` are discovered at startup, so adding a pet is dropping a folder in — no rebuild.
 
 ---
@@ -127,7 +126,6 @@ All fields are optional and validated with a Schemastery schema (invalid values 
 | `petId` | `text` | Which pet to display (a directory name under `assets/pets/`). |
 | `hideWhenIdle` | `false` | Automatically hide the pet when it sleeps (no task), and show it again on activity. |
 | `animationEnabled` | `true` | Run the frame animation (static frame when false). |
-| `showStatusBubble` | `true` | Show the short status label under the pet. |
 | `idleFrequencySec` | `20` | Seconds (≥8) between randomized idle variations. |
 | `clickThrough` | `false` | Pass pointer events through (Windows only). |
 | `startSleeping` | `false` | Start in the sleeping state. |
@@ -143,7 +141,6 @@ Example:
         petScale: 1
         petId: text
         idleFrequencySec: 30
-        showStatusBubble: true
 ```
 
 Window position is persisted privately under `~/.dsh/desktop-pet/position.json` (best-effort; failures are ignored). It does not depend on any Harness storage service.
@@ -174,7 +171,7 @@ integration/  HarnessBridge · capability-detection · event-mapping
         ↓  NormalizedEvent
 core/         PetStateResolver · PetStateMachine · TaskStateRegistry
         ↓  SemanticState
-renderer/     AnimationController · PetWindow · StatusBubble
+renderer/     AnimationController · PetWindow
         ↓  finished RGBA frames
 renderer/backend/  Win32Backend · X11Backend   (native overlays via koffi)
         ↑
