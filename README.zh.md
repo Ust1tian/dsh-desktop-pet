@@ -1,0 +1,214 @@
+# dsh-desktop-pet
+
+[English](README.md) | 中文
+
+**dsh-desktop-pet** 是 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 的一个**可选桌面伴侣**插件。它用一个小动画宠物作为环境状态指示器：harness 空闲时宠物放松，模型推理时"思考"，执行工具时"工作"，等待输入时"求关注"，一轮任务结束时庆祝（或皱眉）。
+
+它**不是**第二个聊天界面，不是任务管理器，也不是完整的桌面应用。它是一个状态指示器。
+
+- **插件优先**：就是一个普通的 deepseek-harness 插件——没有独立启动的守护进程、浏览器或桌面应用。
+- **零网络**：所有资源随插件发布；无遥测、无 CDN、无远程服务。
+- **零额外 LLM 成本**：事件 → 状态的解析完全确定，不额外调用模型。
+- **隐私优先**：只渲染很短的固定标签（`Working…`、`Done` 等），绝不显示提示词、代码、密钥、工具输出或对话内容。
+- **运行时发现宠物**：`assets/pets/` 下的宠物在启动时自动发现，添加宠物就是放进一个文件夹——无需重新构建。
+
+---
+
+## 安装
+
+插件是一个同时包含宿主半（宠物窗口）和客户端半（设置卡片）的 Cordis **组合包**。用下面的命令安装进 profile：
+
+```sh
+dsh plugin --profile <name> add ./dsh-desktop-pet
+```
+
+（从源码检出运行时，用 `pnpm dsh plugin --profile <name> add ./dsh-desktop-pet`。）然后运行：
+
+```sh
+dsh --profile <name>
+```
+
+`dsh plugin add` 会安装包；由于清单里声明了 `dsh.bundle`，它还会自动把插件加入 profile 的 bundle 列表。
+
+> 如果你克隆了 harness 仓库并从源码运行，请给 `dsh` 命令加上 `pnpm` 前缀（见 harness `README` 的 run-from-source 章节）。
+
+### 启用 / 停用
+
+把插件配置里的 `enabled` 设为 `false`，或从 profile 中移除该 bundle。此时插件仍会加载但不显示任何东西；完全移除它对 Harness 正常运行毫无影响。
+
+---
+
+## 添加宠物
+
+宠物是遵循固定精灵图格式的普通文件夹。专属指南里介绍了三种常见的获取方式，每种都配有可复制的 prompt 和手动步骤：
+
+- **hatch-pet** —— 用技能生成宠物，然后把输出文件夹放进 `assets/pets/`。
+- **导入已有文件夹** —— 把含 `pet.json` + `spritesheet.webp` 的文件夹复制进 `assets/pets/`。
+- **Petdex 社区** —— 下载一个社区宠物并复制进去。
+
+完整流程见 **[添加宠物](docs/adding-a-pet.zh.md)**，确切的 `pet.json` 与精灵图布局见 **[资源格式参考](docs/adding-a-pet.zh.md#资源格式参考)**。
+
+---
+
+## 支持平台
+
+| 平台 | 状态 |
+|----------|--------|
+| Windows 11 | ✅ 首要目标（基于 koffi 的 Win32 分层窗口）|
+| Linux（X11 / XWayland）| ✅（XCB ARGB 悬浮层；**需要合成器**）|
+| macOS | ❌ 未实现（后端接口已预留）|
+
+Linux 的逐像素透明需要一个运行中的合成器（GNOME/KDE 默认自带；轻量 WM 需要 picom 之类）。在 Wayland 上悬浮层通过 XWayland 运行。
+
+---
+
+## 配置
+
+所有字段都可选，并用 Schemastery schema 校验（非法值会在加载时明确报错）。用户可编辑字段（`enabled`、`petScale`、`petId`、`hideWhenIdle`）会显示在 Web 设置卡片上。
+
+| 字段 | 默认值 | 说明 |
+|-------|---------|-------------|
+| `enabled` | `true` | 总开关。 |
+| `alwaysOnTop` | `true` | 让宠物置顶。 |
+| `petScale` | `1` | 宠物大小，0.5–4 倍，步长 0.25。 |
+| `petId` | `text` | 显示哪个宠物（即 `assets/pets/` 下的目录名）。 |
+| `hideWhenIdle` | `false` | 宠物睡眠（无任务）时自动隐藏，有任务时重新显示。 |
+| `animationEnabled` | `true` | 运行动画（为 false 时显示静态帧）。 |
+| `showStatusBubble` | `true` | 在宠物下方显示简短状态标签。 |
+| `idleFrequencySec` | `20` | 随机空闲动作间隔秒数（≥8）。 |
+| `clickThrough` | `false` | 让指针事件穿透（仅 Windows）。 |
+| `startSleeping` | `false` | 以睡眠状态启动。 |
+| `animationSpeed` | `1` | 全局速度倍率（0.25–4）。 |
+| `petPath` | `null` | 含 `pet.json` + 精灵图的外部目录（覆盖 `assets/pets/`）。 |
+
+示例：
+
+```yaml
+- insert:
+    - id: desktop-pet
+      name: dsh-desktop-pet
+      config:
+        petScale: 1
+        petId: text
+        idleFrequencySec: 30
+        showStatusBubble: true
+```
+
+窗口位置私下持久化在 `~/.dsh/desktop-pet/position.json`（尽力而为，失败忽略），不依赖任何 Harness 存储服务。
+
+### 开发者模式
+
+当核心的 `ctx.commands` 服务存在时，插件会注册一个 `/pet <state>` 命令，用于在不调用任何 LLM 的情况下模拟状态：
+
+```text
+/pet thinking
+/pet working
+/pet waiting_for_user
+/pet success
+/pet error
+/pet reset
+```
+
+有效状态：`STARTING IDLE THINKING WORKING CODING RUNNING_COMMAND WAITING_FOR_USER SUCCESS ERROR SLEEPING`。
+
+---
+
+## 架构
+
+```
+harness 事件 / 生命周期
+        ↓  （唯一的 harness 专属层）
+integration/  HarnessBridge · capability-detection · event-mapping
+        ↓  NormalizedEvent
+core/         PetStateResolver · PetStateMachine · TaskStateRegistry
+        ↓  SemanticState
+renderer/     AnimationController · PetWindow · StatusBubble
+        ↓  最终 RGBA 帧
+renderer/backend/  Win32Backend · X11Backend   （基于 koffi 的原生悬浮层）
+        ↑
+renderer/codex-pet/  PetContract · PetLoader   （pet.json + 精灵图）
+```
+
+- **`HarnessBridge`** 是唯一了解原始 harness 事件名的模块，其上的所有内容都与 harness 无关。
+- **宠物核心**（`core/`）是一个独立库：无需 harness、无需窗口、无需网络即可测试。
+- **后端** 在 `WindowBackend` 之后做平台隔离；渲染器永远看不到 Win32 或 X11 细节。
+- **客户端半**（`src/client/`）是一个单独的浏览器 bundle，通过 harness 模块加载器注册；宿主半与客户端半通过 settings namespace 通信。
+
+### Harness 依赖
+
+只用到了 Cordis 插件生命周期和以下**核心**服务/事件：
+
+- 插件入口：`apply(ctx, config)` + `name` / `inject` / `Config`。
+- 生命周期：`ctx.effect()`、`ctx.on()`、`ctx.logger(name)`。
+- 活动观察：`session/event`、`agent/status`。
+- 设置：`desktop-pet` settings namespace（宿主侧），由客户端卡片绑定。
+- 可选（探测、非必需）：`ctx.agents`、`ctx.sessions`、`ctx.approval`、`ctx.commands`。
+
+不需要任何非核心插件。可选服务缺失时插件会优雅降级（状态更粗略、没有 `/pet` 命令）。
+
+### 外部依赖
+
+| 包 | 用途 | 运行时 |
+|---------|---------|---------|
+| `koffi` | 悬浮窗口的 Win32 + X11 FFI | Node ≥22 |
+| `sharp` | 把 WebP/PNG 精灵图解码为 RGBA | Node ≥22 |
+| `@deepseek-ai/schemastery` | 配置 schema 校验 | Node ≥22 |
+| `clsx` | 客户端卡片的类名辅助（内联进浏览器 bundle）| 构建期 |
+
+Peer（仅类型、不打包）：`@deepseek-ai/cordis`。
+
+客户端 bundle 里的 `react` 和 `@deepseek-ai/dsh-client-*` 导入都是外部化的：它们由 harness 模块加载器在运行时提供，因此插件不会把它们作为运行时依赖发布（它们只作为 dev 依赖用于类型检查和打包）。
+
+**明确避免**：Electron、Tauri、WebView2/webview、GLFW/SDL/raylib、游戏引擎、GPU/OpenGL、Docker、数据库、Redis、任何外部服务器、浏览器自动化。
+
+### 事件 → 状态映射
+
+| 归一化事件（来自 harness）| 宠物状态（语义 → 动画）|
+|----------------------------------|----------------------------------|
+| 启动 | `STARTING` → `waving` |
+| 空闲（`agent/status: idle`）| `IDLE` → `idle` |
+| `assistant/chunk`（text/reasoning/tool-call delta）| `THINKING` → `running` |
+| `tool/call`（编辑类工具）| `CODING` → `running` |
+| `tool/call`（shell/命令类工具）| `RUNNING_COMMAND` → `running` |
+| `tool/call`（其它）| `WORKING` → `running` |
+| `approval/asked` / 等待 | `WAITING_FOR_USER` → `waiting` |
+| `turn/end` 原因 `completed` | `SUCCESS` → `review` |
+| `turn/end` 原因 `error`/`aborted` | `ERROR` → `failed` |
+| 长时间静默 | `SLEEPING` → `idle` |
+
+`SUCCESS` / `ERROR` / `STARTING` 是临时状态（默认 2 秒）后回到 `IDLE`。并发 agent 按 session/task 分别跟踪，并按优先级 `WAITING_FOR_USER > ERROR > WORKING > THINKING > SUCCESS > IDLE` 合成。
+
+### 扩展
+
+- **添加宠物** —— 见 [添加宠物](docs/adding-a-pet.zh.md)；无需改代码。
+- **添加动画状态** —— 在 `src/core/types.ts` 扩展 `SemanticState`，在 `src/core/PetStateResolver.ts` 扩展其解析映射，并在 `SEMANTIC_TO_CODEX` 扩展渲染姿态。
+- **添加窗口后端** —— 实现 `WindowBackend`（`src/renderer/backend/WindowBackend.ts`）并在 `src/renderer/backend/selectBackend.ts` 注册。
+
+---
+
+## 测试
+
+```sh
+npm test                # vitest 单元测试（核心 + 加载器 + 集成）
+npm run typecheck       # tsc --noEmit（宿主半）
+npm run typecheck:client # tsc -p tsconfig.client.json --noEmit（客户端半）
+npm run build           # tsdown 打包（宿主 + 客户端）
+npm run gen:assets      # 重新生成内置的 text 宠物
+```
+
+宠物核心在无 harness、无显示环境的情况下测试。原生悬浮层后端需要真实桌面会话，**不**在无头测试套件中运行——需在 Windows/Linux 上人工验证。
+
+---
+
+## 已知限制
+
+- **Linux 透明需要合成器**；在 Wayland 上宠物作为 XWayland 客户端运行（无原生 wlr-layer-shell）。
+- **macOS 未实现**。
+- 内置占位宠物只有 `text` 测试宠物——纯 SVG 绘制的文字，不含 OpenAI/Codex/DeepSeek 的角色美术或商标。
+- 原生窗口渲染（无边框/透明/置顶/拖动）尚未被自动化 CI 覆盖，需在真实桌面上人工检查。
+
+---
+
+## License
+
+MIT.

@@ -1,52 +1,62 @@
 # dsh-desktop-pet
 
+English | [中文](README.zh.md)
+
 An **optional desktop companion** for [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness). It shows a small animated pet as an ambient status indicator: the pet relaxes when the harness is idle, "thinks" while the model reasons, "works" while tools run, waits when the harness needs input, and celebrates (or frowns) when a turn finishes.
 
 It is **not** a second chat UI, a task manager, or a full desktop app. It is a status indicator.
 
-- **Plugin-first**: it is a normal deepseek-harness plugin — no separately launched daemon, browser, or desktop app.
+- **Plugin-first**: a normal deepseek-harness plugin — no separately launched daemon, browser, or desktop app.
 - **Zero network**: all assets ship with the plugin; no telemetry, CDN, or remote service.
 - **Zero added LLM cost**: event → state resolution is fully deterministic.
 - **Privacy-first**: it only ever renders short fixed labels (`Working…`, `Done`, …). It never shows prompts, code, secrets, tool output, or conversation content.
-- **Codex-compatible asset format**: it reads the same `pet.json` + sprite-sheet format produced by the `hatch-pet` skill, so a generated pet can be dropped in directly.
+- **Runtime-discovered pets**: pets under `assets/pets/` are discovered at startup, so adding a pet is dropping a folder in — no rebuild.
 
 ---
 
 ## Installation
 
-The plugin is a Cordis **bundle**: an npm package that contributes a `cordis.patch.yml` layer. Install it into a profile:
+The plugin is a Cordis **bundle** that ships both a host half (the pet window) and
+a client half (the settings card). Install it into a profile:
 
 ```sh
 dsh plugin --profile <name> add ./dsh-desktop-pet
 ```
 
-(Or `pnpm dsh plugin --profile <name> add ./dsh-desktop-pet` from a source checkout.) Then run:
+(Or `pnpm dsh plugin --profile <name> add ./dsh-desktop-pet` when running from a
+source checkout.) Then run:
 
 ```sh
 dsh --profile <name>
 ```
 
-For a quick local overlay without installing into a profile:
+`dsh plugin add` installs the package and, because the manifest declares
+`dsh.bundle`, adds it to the profile's bundle list automatically.
 
-```sh
-dsh web --patch ./cordis.patch.yml
-```
-
-> If you cloned the harness repo and are running from source, prefix `dsh` commands with `pnpm` (see the harness `README` run-from-source section).
+> If you cloned the harness repo and run from source, prefix `dsh` commands with
+> `pnpm` (see the harness `README` run-from-source section).
 
 ### Enable / disable
 
-Set the `enabled` config field to `false` in your profile's `cordis.patch.yml` (or via `--patch`):
+Set `enabled: false` in the plugin's config, or remove the bundle from the
+profile. The plugin then loads but shows nothing; removing it entirely leaves
+Harness fully functional.
 
-```yaml
-- insert:
-    - id: desktop-pet
-      name: dsh-desktop-pet
-      config:
-        enabled: false
-```
+---
 
-The plugin still loads but does nothing. Removing the bundle entirely also leaves Harness fully functional.
+## Adding a pet
+
+Pets are plain folders following a fixed sprite-sheet format. Three common ways
+to obtain one are covered in the dedicated guide, each with a copy-paste prompt
+and manual steps:
+
+- **hatch-pet** — generate a pet with the skill, then drop its output folder into `assets/pets/`.
+- **Import an existing folder** — copy a folder containing `pet.json` + `spritesheet.webp` into `assets/pets/`.
+- **Petdex community** — download a community pet and copy it in.
+
+See **[Adding a Pet](docs/adding-a-pet.md)** for the full walkthrough, and the
+**[asset format reference](docs/adding-a-pet.md#asset-format-reference)** for the
+exact `pet.json` and sprite-sheet layout.
 
 ---
 
@@ -64,20 +74,22 @@ Linux per-pixel transparency needs a running compositor (GNOME/KDE ship one by d
 
 ## Configuration
 
-All fields are optional and validated with a Schemastery schema (invalid values fail loudly at load).
+All fields are optional and validated with a Schemastery schema (invalid values fail loudly at load). The user-editable fields (`enabled`, `petScale`, `petId`, `hideWhenIdle`) are exposed on the Web settings card.
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `true` | Master switch. |
 | `alwaysOnTop` | `true` | Keep the pet above other windows. |
-| `petScale` | `1` | Integer scale of the 192×208 cells. |
+| `petScale` | `1` | Pet size, 0.5–4× in 0.25 steps. |
+| `petId` | `text` | Which pet to display (a directory name under `assets/pets/`). |
+| `hideWhenIdle` | `false` | Automatically hide the pet when it sleeps (no task), and show it again on activity. |
 | `animationEnabled` | `true` | Run the frame animation (static frame when false). |
 | `showStatusBubble` | `true` | Show the short status label under the pet. |
 | `idleFrequencySec` | `20` | Seconds (≥8) between randomized idle variations. |
 | `clickThrough` | `false` | Pass pointer events through (Windows only). |
 | `startSleeping` | `false` | Start in the sleeping state. |
 | `animationSpeed` | `1` | Global speed multiplier (0.25–4). |
-| `petPath` | `null` | Directory containing a `pet.json` + sprite sheet (hatch-pet output). Defaults to the bundled placeholder. |
+| `petPath` | `null` | External directory containing `pet.json` + a sprite sheet (overrides `assets/pets/`). |
 
 Example:
 
@@ -87,9 +99,9 @@ Example:
       name: dsh-desktop-pet
       config:
         petScale: 1
+        petId: text
         idleFrequencySec: 30
         showStatusBubble: true
-        petPath: '/absolute/path/to/my-hatch-pet'
 ```
 
 Window position is persisted privately under `~/.dsh/desktop-pet/position.json` (best-effort; failures are ignored). It does not depend on any Harness storage service.
@@ -130,6 +142,7 @@ renderer/codex-pet/  PetContract · PetLoader   (pet.json + sprite sheet)
 - **`HarnessBridge`** is the only module that knows raw harness event names. Everything above it is harness-independent.
 - **Pet core** (`core/`) is a standalone library: testable with no harness, no window, no network.
 - **Backends** are platform-isolated behind `WindowBackend`; the renderer never sees Win32 or X11 details.
+- **Client half** (`src/client/`) is a separate browser bundle registered through the harness module loader; the host and client halves communicate through the settings namespace.
 
 ### Harness dependencies
 
@@ -138,26 +151,33 @@ Only the Cordis plugin lifecycle and these **core** services/events are used:
 - Plugin entry: `apply(ctx, config)` + `name` / `inject` / `Config`.
 - Lifecycle: `ctx.effect()`, `ctx.on()`, `ctx.logger(name)`.
 - Activity observation: `session/event`, `agent/status`.
+- Settings: the `desktop-pet` settings namespace (host-side), bound by the client card.
 - Optional (detected, not required): `ctx.agents`, `ctx.sessions`, `ctx.approval`, `ctx.commands`.
 
 No non-core plugin is required. If an optional service is absent, the pet degrades gracefully (coarser states, no `/pet` command).
 
 ### External dependencies
 
-| Package | Purpose | Why it is needed | Runtime |
-|---------|---------|------------------|---------|
-| `koffi` | Win32 + X11 FFI for the overlay window | The harness ships no window abstraction; koffi is the smallest in-process native path (prebuilt, no compiler). It is already used by the harness repo for Win32 FFI. | Node ≥22 |
-| `sharp` | Decode WebP/PNG sprite sheets to RGBA | Node has no built-in WebP decoder; hatch-pet output is WebP. `sharp` is already used by the harness repo (`attachment-local`) and ships prebuilt binaries. | Node ≥22 |
-| `@deepseek-ai/schemastery` | Config schema validation | The standard schema dialect the harness already uses. | Node ≥22 |
+| Package | Purpose | Runtime |
+|---------|---------|---------|
+| `koffi` | Win32 + X11 FFI for the overlay window | Node ≥22 |
+| `sharp` | Decode WebP/PNG sprite sheets to RGBA | Node ≥22 |
+| `@deepseek-ai/schemastery` | Config schema validation | Node ≥22 |
+| `clsx` | Class-name helper for the client card (inlined into the browser bundle) | build |
 
 Peer (type-only, not bundled): `@deepseek-ai/cordis`.
+
+The client bundle's `react` and `@deepseek-ai/dsh-client-*` imports are externalized:
+they are provided at runtime by the harness module loader, so the plugin does not
+ship them as runtime dependencies (they appear only as dev dependencies for type
+checking and bundling).
 
 **Explicitly avoided**: Electron, Tauri, WebView2/webview, GLFW/SDL/raylib, game engines, GPU/OpenGL, Docker, databases, Redis, any external server, browser automation.
 
 ### Event → state mapping
 
-| Normalized event (from harness) | Pet state (semantic → Codex pose) |
-|----------------------------------|-----------------------------------|
+| Normalized event (from harness) | Pet state (semantic → animation) |
+|----------------------------------|----------------------------------|
 | startup | `STARTING` → `waving` |
 | idle (`agent/status: idle`) | `IDLE` → `idle` |
 | `assistant/chunk` (text/reasoning/tool-call delta) | `THINKING` → `running` |
@@ -171,44 +191,22 @@ Peer (type-only, not bundled): `@deepseek-ai/cordis`.
 
 `SUCCESS` / `ERROR` / `STARTING` are transient (default 2s) then return to `IDLE`. Concurrent agents are tracked per session/task and folded by priority `WAITING_FOR_USER > ERROR > WORKING > THINKING > SUCCESS > IDLE`.
 
-### How to add a new animation
+### Extending
 
-Animations are data-driven by the Codex contract (see `src/renderer/codex-pet/PetContract.ts`):
-
-1. Provide a `pet.json` + sprite sheet (see the Codex pet format below).
-2. Point `petPath` at that directory.
-3. The nine fixed states and per-frame durations are already wired; no code change is required for a new pet.
-
-To add a **new state**, extend `SemanticState` in `src/core/types.ts`, its resolver mapping in `src/core/PetStateResolver.ts`, and its renderer pose in `SEMANTIC_TO_CODEX`.
-
-### How to add another window backend
-
-Implement `WindowBackend` (`src/renderer/backend/WindowBackend.ts`) and register it in `src/renderer/backend/selectBackend.ts`. The renderer only talks to the interface; no other code changes.
-
-### Codex pet format
-
-`pet.json`:
-
-```json
-{
-  "id": "my-pet",
-  "displayName": "My Pet",
-  "spriteVersionNumber": 1,
-  "spritesheetPath": "spritesheet.webp"
-}
-```
-
-Sprite sheet: `8` columns × `9` rows (v1) or `11` rows (v2), cell `192×208`, row-major. Animation rows are fixed, in order: `idle, running-right, running-left, waving, jumping, failed, waiting, running, review`. Lossless WebP (or PNG). Per-frame durations are baked into the renderer (see `PetContract.ANIMATION_ROWS`). This is the format produced by the `hatch-pet` skill; see the "compatibility note" below.
+- **Adding a pet** — see [Adding a Pet](docs/adding-a-pet.md); no code change is required.
+- **Adding an animation state** — extend `SemanticState` in `src/core/types.ts`, its resolver mapping in `src/core/PetStateResolver.ts`, and its renderer pose in `SEMANTIC_TO_CODEX`.
+- **Adding a window backend** — implement `WindowBackend` (`src/renderer/backend/WindowBackend.ts`) and register it in `src/renderer/backend/selectBackend.ts`.
 
 ---
 
 ## Testing
 
 ```sh
-npm test          # vitest unit tests (core + loader + integration)
-npm run typecheck # tsc --noEmit
-npm run build     # tsdown bundle
-npm run gen:assets # regenerate the bundled placeholder pet
+npm test               # vitest unit tests (core + loader + integration)
+npm run typecheck      # tsc --noEmit (host half)
+npm run typecheck:client # tsc -p tsconfig.client.json --noEmit (client half)
+npm run build          # tsdown bundle (host + client)
+npm run gen:assets     # regenerate the bundled text pet
 ```
 
 The pet core is tested without a harness or a display. The native overlay backends require a real desktop session and are **not** exercised by the headless test suite — they need manual verification on Windows/Linux.
@@ -219,8 +217,7 @@ The pet core is tested without a harness or a display. The native overlay backen
 
 - **Linux transparency requires a compositor**; on Wayland the pet runs as an XWayland client (no native wlr-layer-shell).
 - **macOS is not implemented**.
-- **Codex compatibility note**: there is no official public spec for the Codex/hatch-pet format. The contract here (`pet.json` fields, 192×208 cells, 8×(9|11) grid, 9 state rows, per-frame durations) is cross-checked against several independent reimplementations. If a real hatch-pet artifact differs, `src/renderer/codex-pet/PetContract.ts` is the single place to adjust; the loader validates width and reports mismatches loudly.
-- The bundled placeholder artwork is original programmatic geometry (a mint "blob"); it contains no OpenAI/Codex/DeepSeek character artwork or trademarks.
+- The bundled placeholder is the `text` test pet only — original SVG-drawn text, with no OpenAI/Codex/DeepSeek character artwork or trademarks.
 - Native window rendering (frameless/transparent/topmost/drag) has not been exercised by automated CI and needs a manual check on a real desktop.
 
 ---
