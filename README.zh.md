@@ -17,6 +17,12 @@
 
 插件是一个同时包含宿主半（宠物窗口）和客户端半（设置卡片）的 Cordis **组合包**。`dsh plugin add` 会安装它，并因清单里声明了 `dsh.bundle` 而自动把它加入 profile 的 bundle 列表。
 
+### 从 npm 安装
+
+```sh
+dsh plugin --profile <name> add dsh-desktop-pet
+```
+
 ### 从本地目录安装
 
 直接从插件源码目录安装（profile 会把它作为 `link:` 依赖保留）：
@@ -40,14 +46,6 @@ dsh plugin --profile web add D:/deepseek-pet
 ```sh
 npm pack
 dsh plugin --profile <name> add /path/to/dsh-desktop-pet-0.1.0.tgz
-```
-
-### 从 npm 安装
-
-插件发布到 npm registry 后：
-
-```sh
-dsh plugin --profile <name> add dsh-desktop-pet
 ```
 
 ### 从 Git 仓库安装

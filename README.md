@@ -20,6 +20,12 @@ and a client half (the settings card). `dsh plugin add` installs it and, because
 the manifest declares `dsh.bundle`, adds it to the profile's bundle list
 automatically.
 
+### From npm
+
+```sh
+dsh plugin --profile <name> add dsh-desktop-pet
+```
+
 ### From a local directory
 
 Install the plugin directly from its source directory (the profile keeps it as
@@ -45,14 +51,6 @@ Pack the plugin, then install the tarball:
 ```sh
 npm pack
 dsh plugin --profile <name> add /path/to/dsh-desktop-pet-0.1.0.tgz
-```
-
-### From npm
-
-After the plugin is published to the npm registry:
-
-```sh
-dsh plugin --profile <name> add dsh-desktop-pet
 ```
 
 ### From a Git repository
