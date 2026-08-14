@@ -1,0 +1,19 @@
+# desktop-pet bundle layer.
+#
+# Applied when a profile lists this bundle (see `dsh.profile.bundles`).
+# The pet is optional: omitting or removing this bundle leaves Harness
+# functioning normally.
+- insert:
+    - id: desktop-pet
+      name: dsh-desktop-pet
+      config:
+        enabled: true
+        alwaysOnTop: true
+        petScale: 1
+        animationEnabled: true
+        showStatusBubble: true
+        idleFrequencySec: 20
+        clickThrough: false
+        startSleeping: false
+        animationSpeed: 1
+        petPath: null
