@@ -10,6 +10,8 @@
         enabled: true
         alwaysOnTop: true
         petScale: 1
+        petId: text
+        hideWhenIdle: false
         animationEnabled: true
         showStatusBubble: true
         idleFrequencySec: 20

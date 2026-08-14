@@ -3,8 +3,9 @@
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2024"],
-    "types": ["node"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": [],
     "strict": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
@@ -14,6 +15,5 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "scripts"],
-  "exclude": ["src/client"]
+  "include": ["src/client", "src/css-modules.d.ts"]
 }
