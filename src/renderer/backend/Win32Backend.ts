@@ -6,15 +6,17 @@
  * and draws finished RGBA frames through a 32-bit DIB section. Dragging is
  * implemented with a `WM_NCHITTEST → HTCAPTION` window procedure.
  *
- * koffi is imported lazily so a non-Windows process never loads it. Every
- * native call is wrapped by the renderer's failure isolation: if anything
- * here throws, the pet disables its window and Harness keeps running.
+ * koffi is imported lazily so a non-Windows process never loads it. All koffi
+ * types (structs, prototypes) and the window class are registered exactly once
+ * per process — recreating the window for a size/pet change reuses them, so a
+ * second `create()` call never re-declares a named type or a class whose
+ * previous window procedure has been unregistered.
  *
  * NOTE: this backend requires a real desktop session and has not been
  * exercised by the headless CI; it needs manual verification on Windows.
  */
 
-import { rgbaToPremultipliedBgra, type PetFrame } from '../FrameDecoder'
+import { rgbaToPremultipliedBgraInto, type PetFrame } from '../FrameDecoder'
 import type { WindowBackend, WindowBackendOptions, WindowHandle } from './WindowBackend'
 
 // --- Win32 constants --------------------------------------------------------
@@ -24,7 +26,6 @@ const WS_EX_TRANSPARENT = 0x00000020
 const WS_EX_TOPMOST = 0x00000008
 const WS_EX_TOOLWINDOW = 0x00000080
 const WS_POPUP = 0x80000000
-const CW_USEDEFAULT = 0x80000000
 
 const ULW_ALPHA = 0x00000002
 const DIB_RGB_COLORS = 0
@@ -32,15 +33,20 @@ const BI_RGB = 0
 
 const WM_NCHITTEST = 0x0084
 const WM_DESTROY = 0x0002
+const WM_EXITSIZEMOVE = 0x0232
+const WM_NCMOUSEMOVE = 0x00a0
+const WM_NCMOUSELEAVE = 0x02a2
 const HTCAPTION = 2
 
-const SWP_NOACTIVATE = 0x0010
+const TME_LEAVE = 0x00000002
+const TME_NONCLIENT = 0x00000010
+
 const SW_SHOWNOACTIVATE = 4
 const HWND_TOPMOST = -1
 const HWND_NOTOPMOST = -2
+const PM_REMOVE = 1
 
-const SM_CXSCREEN = 0
-const SM_CYSCREEN = 1
+const CLASS_NAME = 'DshDesktopPet'
 
 // --- koffi minimal type -----------------------------------------------------
 
@@ -54,10 +60,51 @@ interface Koffi {
   proto(declaration: string): any
   register(fn: (...args: any[]) => any, type: any): any
   unregister(handle: any): void
-  sizeof(type: string): number
+  sizeof(type: any): number
   view(address: any, length: number): ArrayBuffer
   decode(address: any, type: any, ...rest: any[]): any
-  address(value: any): any
+  alloc(type: any, count: number): any
+  encode(address: any, type: any, value: any): void
+}
+
+/**
+ * Everything declared once per process: the koffi instance, the DLLs, the named
+ * struct/prototype types, and the single registered window class + window
+ * procedure. `create()` only instantiates a window from these.
+ */
+interface Win32Bindings {
+  koffi: Koffi
+  POINT: any
+  SIZE: any
+  BLENDFUNCTION: any
+  MSG: any
+  RECT: any
+  BITMAPINFOHEADER: any
+  updateLayeredWindow: (...args: any[]) => number
+  setWindowPos: (...args: any[]) => number
+  showWindow: (...args: any[]) => number
+  destroyWindow: (...args: any[]) => number
+  deleteObject: (...args: any[]) => number
+  deleteDC: (...args: any[]) => number
+  peekMessage: (...args: any[]) => number
+  translateMessage: (...args: any[]) => number
+  dispatchMessage: (...args: any[]) => number
+  getWindowRect: (...args: any[]) => number
+  createDibSection: (...args: any[]) => any
+  createCompatibleDC: (...args: any[]) => any
+  selectObject: (...args: any[]) => any
+  getDC: (...args: any[]) => any
+  releaseDC: (...args: any[]) => number
+  createWindowExW: (...args: any[]) => any
+  trackMouseEvent: (...args: any[]) => number
+  TRACKMOUSEEVENT: any
+  wndProc: unknown
+  /** Updated on each `create()` so the single wndProc reports drags to the current window. */
+  currentOnDrag: ((x: number, y: number) => void) | undefined
+  /** Updated on each `create()` so the single wndProc reports hover to the current window. */
+  currentOnHover: (() => void) | undefined
+  /** Updated on each `create()` so the single wndProc reports hover-leave to the current window. */
+  currentOnUnhover: (() => void) | undefined
 }
 
 async function loadKoffi(): Promise<Koffi> {
@@ -65,119 +112,283 @@ async function loadKoffi(): Promise<Koffi> {
   return (mod.default ?? mod) as unknown as Koffi
 }
 
-/**
- * A window handle backed by Win32. The window procedure callback is unregistered
- * on `destroy`; the DIB memory is owned by GDI and released with the bitmap.
- */
-class Win32Handle implements WindowHandle {
-  private destroyed = false
-  private pumpTimer: ReturnType<typeof setInterval> | undefined
-  private wndProcHandle: unknown
+let bindingsPromise: Promise<Win32Bindings> | undefined
 
-  constructor(
-    private readonly koffi: Koffi,
-    private readonly user32: KoffiLibrary,
-    private readonly gdi32: KoffiLibrary,
-    private readonly hwnd: number,
-    private readonly hdcMem: number,
-    private readonly hBitmap: number,
-    private readonly bitsPtr: any,
-    private readonly bitsLength: number,
-    private readonly updateLayeredWindow: (...args: any[]) => number,
-    private readonly setWindowPos: (...args: any[]) => number,
-    private readonly showWindow: (...args: any[]) => number,
-    private readonly destroyWindow: (...args: any[]) => number,
-    private readonly deleteObject: (...args: any[]) => number,
-    private readonly deleteDC: (...args: any[]) => number,
-    private readonly getMessage: (...args: any[]) => number,
-    private readonly translateMessage: (...args: any[]) => number,
-    private readonly dispatchMessage: (...args: any[]) => number,
-    private onDrag: ((x: number, y: number) => void) | undefined,
-    wndProcHandle: unknown,
-  ) {
-    this.wndProcHandle = wndProcHandle
-  }
+/** Build (once) and cache the process-wide Win32 bindings. */
+function getBindings(): Promise<Win32Bindings> {
+  if (bindingsPromise !== undefined) return bindingsPromise
+  bindingsPromise = (async () => {
+    const koffi = await loadKoffi()
+    const user32 = koffi.load('user32.dll')
+    const gdi32 = koffi.load('gdi32.dll')
+    const kernel32 = koffi.load('kernel32.dll')
 
-  present(frame: PetFrame): void {
-    if (this.destroyed) return
-    const bgra = rgbaToPremultipliedBgra(frame)
-    // Write the premultiplied BGRA pixels into the DIB's bit memory.
-    const view = new Uint8Array(this.koffi.view(this.bitsPtr, this.bitsLength))
-    view.set(bgra.subarray(0, Math.min(bgra.length, view.length)))
-
-    const koffi = this.koffi
-    const srcPt = koffi.struct('DshPt', { x: 'int32', y: 'int32' })
-    const size = koffi.struct('DshSize', { cx: 'int32', cy: 'int32' })
-    const blend = koffi.struct('DshBlend', {
+    // --- Named types (declared exactly once) ------------------------------
+    const POINT = koffi.struct('DshPt', { x: 'int32', y: 'int32' })
+    const SIZE = koffi.struct('DshSize', { cx: 'int32', cy: 'int32' })
+    const BLENDFUNCTION = koffi.struct('DshBlend', {
       BlendOp: 'uint8',
       BlendFlags: 'uint8',
       SourceConstantAlpha: 'uint8',
       AlphaFormat: 'uint8',
     })
-    const ptSrc = new srcPt()
-    const ptDst = new srcPt()
-    const sz = new size()
-    sz.cx = frame.width
-    sz.cy = frame.height
-    const bf = new blend()
-    bf.BlendOp = 0 // AC_SRC_OVER
-    bf.BlendFlags = 0
-    bf.SourceConstantAlpha = 255
-    bf.AlphaFormat = 1 // AC_SRC_ALPHA
+    const RECT = koffi.struct('DshRect', { left: 'int32', top: 'int32', right: 'int32', bottom: 'int32' })
+    // MSG is a fixed 48-byte structure on 64-bit Windows; PeekMessageW writes
+    // into this pre-allocated slot (never pass null).
+    const MSG = koffi.struct('DshMsg', {
+      hwnd: 'void *',
+      message: 'uint32',
+      wParam: 'uintptr',
+      lParam: 'intptr',
+      time: 'uint32',
+      pt: POINT,
+    })
+    const BITMAPINFOHEADER = koffi.struct('DshBitmapInfoHeader', {
+      biSize: 'uint32',
+      biWidth: 'int32',
+      biHeight: 'int32',
+      biPlanes: 'uint16',
+      biBitCount: 'uint16',
+      biCompression: 'uint32',
+      biSizeImage: 'uint32',
+      biXPelsPerMeter: 'int32',
+      biYPelsPerMeter: 'int32',
+      biClrUsed: 'uint32',
+      biClrImportant: 'uint32',
+    })
 
-    this.updateLayeredWindow(this.hwnd, 0, ptDst, sz, this.hdcMem, ptSrc, 0, bf, ULW_ALPHA)
+    // --- Function bindings -------------------------------------------------
+    const PVOID = koffi.pointer('void')
+    const PPVOID = koffi.pointer(PVOID)
+
+    const getModuleHandleW = kernel32.func('__stdcall', 'GetModuleHandleW', 'void *', ['str16'])
+    const registerClassExW = user32.func('__stdcall', 'RegisterClassExW', 'uint16', ['void *'])
+    const defWindowProcW = user32.func('__stdcall', 'DefWindowProcW', 'intptr', ['void *', 'uint32', 'uintptr', 'intptr'])
+    const createWindowExW = user32.func('__stdcall', 'CreateWindowExW', 'void *', [
+      'uint32', 'str16', 'str16', 'uint32', 'int32', 'int32', 'int32', 'int32',
+      'void *', 'void *', 'void *', 'void *',
+    ])
+    const getDC = user32.func('__stdcall', 'GetDC', 'void *', ['void *'])
+    const releaseDC = user32.func('__stdcall', 'ReleaseDC', 'int32', ['void *', 'void *'])
+    const createDibSection = gdi32.func('__stdcall', 'CreateDIBSection', 'void *', [PVOID, 'void *', 'uint32', PPVOID, PVOID, 'uint32'])
+    const createCompatibleDC = gdi32.func('__stdcall', 'CreateCompatibleDC', 'void *', ['void *'])
+    const selectObject = gdi32.func('__stdcall', 'SelectObject', 'void *', ['void *', 'void *'])
+    const deleteObject = gdi32.func('__stdcall', 'DeleteObject', 'int32', ['void *'])
+    const deleteDC = gdi32.func('__stdcall', 'DeleteDC', 'int32', ['void *'])
+    const updateLayeredWindow = user32.func('__stdcall', 'UpdateLayeredWindow', 'int32', [
+      'void *', 'void *', 'void *', 'void *', 'void *', 'void *', 'uint32', 'void *', 'uint32',
+    ])
+    const setWindowPos = user32.func('__stdcall', 'SetWindowPos', 'int32', [
+      'void *', 'void *', 'int32', 'int32', 'int32', 'int32', 'uint32',
+    ])
+    const showWindow = user32.func('__stdcall', 'ShowWindow', 'int32', ['void *', 'int32'])
+    const destroyWindow = user32.func('__stdcall', 'DestroyWindow', 'int32', ['void *'])
+    const peekMessageW = user32.func('__stdcall', 'PeekMessageW', 'int32', ['void *', 'void *', 'uint32', 'uint32', 'uint32'])
+    const translateMessage = user32.func('__stdcall', 'TranslateMessage', 'int32', ['void *'])
+    const dispatchMessageW = user32.func('__stdcall', 'DispatchMessageW', 'intptr', ['void *'])
+    const getWindowRect = user32.func('__stdcall', 'GetWindowRect', 'int32', ['void *', 'void *'])
+    const trackMouseEvent = user32.func('__stdcall', 'TrackMouseEvent', 'int32', ['void *'])
+
+    const TRACKMOUSEEVENT = koffi.struct('DshTrackMouseEvent', {
+      cbSize: 'uint32',
+      dwFlags: 'uint32',
+      hwndTrack: 'void *',
+      dwHoverTime: 'uint32',
+    })
+
+    const bindings: Win32Bindings = {
+      koffi,
+      POINT, SIZE, BLENDFUNCTION, MSG, RECT, BITMAPINFOHEADER,
+      updateLayeredWindow, setWindowPos, showWindow, destroyWindow, deleteObject, deleteDC,
+      peekMessage: peekMessageW, translateMessage, dispatchMessage: dispatchMessageW, getWindowRect,
+      createDibSection, createCompatibleDC, selectObject, getDC, releaseDC, createWindowExW,
+      trackMouseEvent, TRACKMOUSEEVENT,
+      wndProc: undefined,
+      currentOnDrag: undefined,
+      currentOnHover: undefined,
+      currentOnUnhover: undefined,
+    }
+
+    // Per-message scratch reused across all windows: the shared wndProc writes
+    // into these instead of allocating on every mouse-move / drag-end.
+    const tme = koffi.alloc(TRACKMOUSEEVENT, 1)
+    const rect = koffi.alloc(RECT, 1)
+
+    // --- Single window class + procedure (registered once) ----------------
+    const wndProcType = koffi.proto('intptr __stdcall DshPetWndProc(void *hwnd, uint32 msg, uintptr wParam, intptr lParam)')
+    const wndProc = koffi.register(
+      (hwnd: any, msg: number, wParam: number, lParam: number) => {
+        if (msg === WM_NCHITTEST) return HTCAPTION
+        if (msg === WM_DESTROY) return 0
+        if (msg === WM_NCMOUSEMOVE) {
+          // Ask Windows to post WM_NCMOUSELEAVE when the cursor leaves, then
+          // report the hover (rate-limiting happens in the pet core).
+          koffi.encode(tme, TRACKMOUSEEVENT, {
+            cbSize: koffi.sizeof(TRACKMOUSEEVENT),
+            dwFlags: TME_LEAVE | TME_NONCLIENT,
+            hwndTrack: hwnd,
+            dwHoverTime: 0,
+          })
+          trackMouseEvent(tme)
+          bindings.currentOnHover?.()
+          return 0
+        }
+        if (msg === WM_NCMOUSELEAVE) {
+          bindings.currentOnUnhover?.()
+          return 0
+        }
+        if (msg === WM_EXITSIZEMOVE) {
+          getWindowRect(hwnd, rect)
+          const r = koffi.decode(rect, RECT)
+          bindings.currentOnDrag?.(r.left, r.top)
+          return 0
+        }
+        return defWindowProcW(hwnd, msg, wParam, lParam)
+      },
+      koffi.pointer(wndProcType),
+    )
+    bindings.wndProc = wndProc
+
+    // lpszClassName / lpszMenuName are UTF-16 string pointers, encoded as
+    // 'str16' so RegisterClassExW and CreateWindowExW agree on the class atom.
+    const WNDCLASSEXW = koffi.struct('DshWndClassExW', {
+      cbSize: 'uint32',
+      style: 'uint32',
+      lpfnWndProc: 'void *',
+      cbClsExtra: 'int32',
+      cbWndExtra: 'int32',
+      hInstance: 'void *',
+      hIcon: 'void *',
+      hCursor: 'void *',
+      hbrBackground: 'void *',
+      lpszMenuName: 'str16',
+      lpszClassName: 'str16',
+      hIconSm: 'void *',
+    })
+    const hInstance = getModuleHandleW(null)
+    const cls = koffi.alloc(WNDCLASSEXW, 1)
+    koffi.encode(cls, WNDCLASSEXW, {
+      cbSize: koffi.sizeof(WNDCLASSEXW),
+      style: 0,
+      lpfnWndProc: wndProc,
+      cbClsExtra: 0,
+      cbWndExtra: 0,
+      hInstance,
+      hIcon: null,
+      hCursor: null,
+      hbrBackground: null,
+      lpszMenuName: null,
+      lpszClassName: CLASS_NAME,
+      hIconSm: null,
+    })
+    registerClassExW(cls)
+
+    return bindings
+  })()
+  return bindingsPromise
+}
+
+/**
+ * A window handle backed by Win32. The DIB memory is owned by GDI and released
+ * with the bitmap on `destroy`; the shared window procedure lives as long as
+ * the process (its class is registered once).
+ */
+class Win32Handle implements WindowHandle {
+  private destroyed = false
+  private pumpTimer: ReturnType<typeof setInterval> | undefined
+
+  // Per-frame scratch, allocated once and reused so the hot render path does
+  // zero native allocation and zero large JS allocation (koffi.alloc() has no
+  // GC finalizer — allocating per frame leaks native heap and eventually stalls
+  // the animation).
+  private readonly ptSrc: any
+  private readonly sz: any
+  private readonly bf: any
+  private readonly dibView: Uint8Array
+  private readonly bgraBuf: Uint8Array
+
+  constructor(
+    private readonly bindings: Win32Bindings,
+    private readonly hwnd: any,
+    private readonly hdcMem: any,
+    private readonly hBitmap: any,
+    private readonly bitsPtr: any,
+    private readonly bitsLength: number,
+    private readonly msg: any,
+  ) {
+    const { koffi, POINT, SIZE, BLENDFUNCTION } = bindings
+    this.ptSrc = koffi.alloc(POINT, 1)
+    koffi.encode(this.ptSrc, POINT, { x: 0, y: 0 })
+    this.sz = koffi.alloc(SIZE, 1)
+    this.bf = koffi.alloc(BLENDFUNCTION, 1)
+    koffi.encode(this.bf, BLENDFUNCTION, {
+      BlendOp: 0, // AC_SRC_OVER
+      BlendFlags: 0,
+      SourceConstantAlpha: 255,
+      AlphaFormat: 1, // AC_SRC_ALPHA
+    })
+    // A persistent view over the DIB's bit memory, and a scratch buffer for the
+    // premultiplied-BGRA conversion. Both are written in place on every frame.
+    this.dibView = new Uint8Array(koffi.view(bitsPtr, bitsLength))
+    this.bgraBuf = new Uint8Array(bitsLength)
+  }
+
+  present(frame: PetFrame): void {
+    if (this.destroyed) return
+    // Convert straight RGBA → premultiplied BGRA directly into the scratch
+    // buffer (no per-frame allocation), then copy into the DIB's bit memory.
+    rgbaToPremultipliedBgraInto(frame, this.bgraBuf)
+    this.dibView.set(this.bgraBuf.subarray(0, Math.min(this.bgraBuf.length, this.dibView.length)))
+
+    const { koffi, SIZE, updateLayeredWindow } = this.bindings
+    koffi.encode(this.sz, SIZE, { cx: frame.width, cy: frame.height })
+
+    // pptDst must be NULL: a non-null pptDst repositions the layered window to
+    // that screen point on every frame, which would snap a dragged pet back to
+    // the top-left corner. NULL keeps the current (possibly user-dragged) position.
+    updateLayeredWindow(this.hwnd, 0, null, this.sz, this.hdcMem, this.ptSrc, 0, this.bf, ULW_ALPHA)
   }
 
   move(x: number, y: number): void {
     if (this.destroyed) return
-    // SWP_NOSIZE | SWP_NOACTIVATE; topmost preserved by the HWND_TOPMOST flag.
-    this.setWindowPos(this.hwnd, HWND_TOPMOST, x, y, 0, 0, 0x0001 | 0x0010)
+    this.bindings.setWindowPos(this.hwnd, HWND_TOPMOST, x, y, 0, 0, 0x0001 | 0x0010)
   }
 
   setAlwaysOnTop(value: boolean): void {
     if (this.destroyed) return
-    this.setWindowPos(this.hwnd, value ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+    this.bindings.setWindowPos(this.hwnd, value ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
   }
 
   show(): void {
     if (this.destroyed) return
-    this.showWindow(this.hwnd, SW_SHOWNOACTIVATE)
+    this.bindings.showWindow(this.hwnd, SW_SHOWNOACTIVATE)
   }
 
   hide(): void {
     if (this.destroyed) return
-    this.showWindow(this.hwnd, 0)
+    this.bindings.showWindow(this.hwnd, 0)
   }
 
   destroy(): void {
     if (this.destroyed) return
     this.destroyed = true
     if (this.pumpTimer) clearInterval(this.pumpTimer)
-    this.destroyWindow(this.hwnd)
-    this.deleteObject(this.hBitmap)
-    this.deleteDC(this.hdcMem)
-    if (this.wndProcHandle) {
-      try {
-        this.koffi.unregister(this.wndProcHandle)
-      } catch {
-        /* already unregistered */
-      }
-    }
-    this.onDrag = undefined
+    this.bindings.destroyWindow(this.hwnd)
+    this.bindings.deleteObject(this.hBitmap)
+    this.bindings.deleteDC(this.hdcMem)
   }
 
   /** Pump pending window messages (invoked on an interval while alive). */
   startPump(): void {
     if (this.pumpTimer || this.destroyed) return
-    // Layered windows we draw ourselves only need hit-test and destroy
-    // handling; a slow poll is plenty and keeps idle CPU near zero.
     this.pumpTimer = setInterval(() => {
       if (this.destroyed) return
-      // Peek-and-dispatch loop bound to available messages.
+      const { peekMessage, translateMessage, dispatchMessage } = this.bindings
+      // PeekMessageW is non-blocking and writes into the pre-allocated MSG.
       let guard = 0
-      while (guard++ < 16 && this.getMessage(null, this.hwnd, 0, 0)) {
-        this.translateMessage(null)
-        this.dispatchMessage(null)
+      while (guard++ < 16 && peekMessage(this.msg, this.hwnd, 0, 0, PM_REMOVE)) {
+        translateMessage(this.msg)
+        dispatchMessage(this.msg)
       }
     }, 50)
   }
@@ -191,117 +402,54 @@ export class Win32Backend implements WindowBackend {
   }
 
   async create(options: WindowBackendOptions): Promise<WindowHandle> {
-    const koffi = await loadKoffi()
-    const user32 = koffi.load('user32.dll')
-    const gdi32 = koffi.load('gdi32.dll')
+    const b = await getBindings()
+    const { koffi, createWindowExW, createDibSection, createCompatibleDC, selectObject, getDC, releaseDC, BITMAPINFOHEADER } = b
 
-    const registerClassExW = user32.func('__stdcall', 'RegisterClassExW', 'uint16', ['void *'])
-    const createWindowExW = user32.func('__stdcall', 'CreateWindowExW', 'void *', [
-      'uint32', 'str16', 'str16', 'uint32', 'int32', 'int32', 'int32', 'int32',
-      'void *', 'void *', 'void *', 'void *',
-    ])
-    const defWindowProcW = user32.func('__stdcall', 'DefWindowProcW', 'intptr', ['void *', 'uint32', 'uintptr', 'intptr'])
-    const getSystemMetrics = user32.func('__stdcall', 'GetSystemMetrics', 'int32', ['int32'])
-    const getDC = user32.func('__stdcall', 'GetDC', 'void *', ['void *'])
-    const releaseDC = user32.func('__stdcall', 'ReleaseDC', 'int32', ['void *', 'void *'])
-    const createDibSection = gdi32.func('__stdcall', 'CreateDIBSection', 'void *', ['void *', 'void *', 'uint32', 'void *', 'void *', 'uint32'])
-    const createCompatibleDC = gdi32.func('__stdcall', 'CreateCompatibleDC', 'void *', ['void *'])
-    const selectObject = gdi32.func('__stdcall', 'SelectObject', 'void *', ['void *', 'void *'])
-    const deleteObject = gdi32.func('__stdcall', 'DeleteObject', 'int32', ['void *'])
-    const deleteDC = gdi32.func('__stdcall', 'DeleteDC', 'int32', ['void *'])
-
-    const updateLayeredWindow = user32.func('__stdcall', 'UpdateLayeredWindow', 'int32', [
-      'void *', 'void *', 'void *', 'void *', 'void *', 'void *', 'uint32', 'void *', 'uint32',
-    ])
-    const setWindowPos = user32.func('__stdcall', 'SetWindowPos', 'int32', [
-      'void *', 'void *', 'int32', 'int32', 'int32', 'int32', 'uint32',
-    ])
-    const showWindow = user32.func('__stdcall', 'ShowWindow', 'int32', ['void *', 'int32'])
-    const destroyWindow = user32.func('__stdcall', 'DestroyWindow', 'int32', ['void *'])
-    const getMessageW = user32.func('__stdcall', 'GetMessageW', 'int32', ['void *', 'void *', 'uint32', 'uint32'])
-    const translateMessage = user32.func('__stdcall', 'TranslateMessage', 'int32', ['void *'])
-    const dispatchMessageW = user32.func('__stdcall', 'DispatchMessageW', 'intptr', ['void *'])
-
-    const className = 'DshDesktopPet'
-    const wndProcType = koffi.proto('intptr __stdcall DshPetWndProc(void *hwnd, uint32 msg, uintptr wParam, intptr lParam)')
-
-    const wndProc = koffi.register(
-      (hwnd: any, msg: number, _wParam: number, _lParam: number) => {
-        if (msg === WM_NCHITTEST) return HTCAPTION
-        if (msg === WM_DESTROY) return 0
-        return defWindowProcW(hwnd, msg, _wParam, _lParam)
-      },
-      wndProcType,
-    )
-
-    const wcx = koffi.struct('DshWndClassExW', {
-      cbSize: 'uint32',
-      style: 'uint32',
-      lpfnWndProc: 'void *',
-      cbClsExtra: 'int32',
-      cbWndExtra: 'int32',
-      hInstance: 'void *',
-      hIcon: 'void *',
-      hCursor: 'void *',
-      hbrBackground: 'void *',
-      lpszMenuName: 'void *',
-      lpszClassName: 'void *',
-      hIconSm: 'void *',
-    })
-    const cls = new wcx()
-    cls.cbSize = koffi.sizeof('void *') * 10 // approximate; sizeof(WNDCLASSEXW)
-    cls.lpfnWndProc = wndProc
-    cls.lpszClassName = className
-
-    registerClassExW(cls)
+    b.currentOnDrag = options.onDrag
+    b.currentOnHover = options.onHover
+    b.currentOnUnhover = options.onUnhover
 
     const exStyle = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | (options.clickThrough ? WS_EX_TRANSPARENT : 0)
     const hwnd = createWindowExW(
-      exStyle, className, '', WS_POPUP,
+      exStyle, CLASS_NAME, '', WS_POPUP,
       options.x, options.y, options.width, options.height,
       null, null, null, null,
-    ) as number
+    )
+    if (hwnd === null) {
+      throw new Error('CreateWindowExW returned a null window handle (window class not registered?)')
+    }
 
     // 32-bit top-down DIB section for the frame pixels.
-    const bmi = koffi.struct('DshBitmapInfoHeader', {
-      biSize: 'uint32',
-      biWidth: 'int32',
-      biHeight: 'int32',
-      biPlanes: 'uint16',
-      biBitCount: 'uint16',
-      biCompression: 'uint32',
-      biSizeImage: 'uint32',
-      biXPelsPerMeter: 'int32',
-      biYPelsPerMeter: 'int32',
-      biClrUsed: 'uint32',
-      biClrImportant: 'uint32',
+    const header = koffi.alloc(BITMAPINFOHEADER, 1)
+    koffi.encode(header, BITMAPINFOHEADER, {
+      biSize: 40,
+      biWidth: options.width,
+      biHeight: -options.height, // top-down
+      biPlanes: 1,
+      biBitCount: 32,
+      biCompression: BI_RGB,
+      biSizeImage: options.width * options.height * 4,
+      biXPelsPerMeter: 0,
+      biYPelsPerMeter: 0,
+      biClrUsed: 0,
+      biClrImportant: 0,
     })
-    const header = new bmi()
-    header.biSize = 40
-    header.biWidth = options.width
-    header.biHeight = -options.height // top-down
-    header.biPlanes = 1
-    header.biBitCount = 32
-    header.biCompression = BI_RGB
-    header.biSizeImage = options.width * options.height * 4
 
+    const PVOID = koffi.pointer('void')
     const screenDC = getDC(null)
-    const bitsPtr = koffi.pointer('void *')
-    const hBitmap = createDibSection(screenDC, header, DIB_RGB_COLORS, bitsPtr, null, 0) as number
+    const bitsSlot = koffi.alloc(PVOID, 1)
+    const hBitmap = createDibSection(screenDC, header, DIB_RGB_COLORS, bitsSlot, null, 0)
     releaseDC(null, screenDC)
+    const bitsPtr = koffi.decode(bitsSlot, PVOID)
 
-    const hdcMem = createCompatibleDC(null) as number
+    const hdcMem = createCompatibleDC(null)
     selectObject(hdcMem, hBitmap)
 
-    const handle = new Win32Handle(
-      koffi, user32, gdi32, hwnd, hdcMem, hBitmap, bitsPtr, options.width * options.height * 4,
-      updateLayeredWindow, setWindowPos, showWindow, destroyWindow, deleteObject, deleteDC,
-      getMessageW, translateMessage, dispatchMessageW, options.onDrag, wndProc,
-    )
+    const msg = koffi.alloc(b.MSG, 1)
+
+    const handle = new Win32Handle(b, hwnd, hdcMem, hBitmap, bitsPtr, options.width * options.height * 4, msg)
     handle.show()
     handle.startPump()
-
-    void getSystemMetrics(SM_CXSCREEN) // warm the binding; result unused
 
     return handle
   }

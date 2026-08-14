@@ -1,0 +1,6 @@
+{
+  "id": "dsh-text",
+  "displayName": "Text (test)",
+  "description": "Text test pet: each state renders a distinct label and colour for binding verification.",
+  "spritesheetPath": "spritesheet.webp"
+}

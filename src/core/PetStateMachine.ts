@@ -52,6 +52,18 @@ const DEFAULTS = {
   sleepAfterMs: 60_000,
 } as const
 
+/**
+ * Transient/terminal states a late `session.idle` must not overwrite: they
+ * own their own expiry or are higher-priority facts the agent-status signal
+ * is too coarse to revoke.
+ */
+const IDLE_PROTECTED_STATES: ReadonlySet<SemanticState> = new Set([
+  'STARTING',
+  'WAITING_FOR_USER',
+  'SUCCESS',
+  'ERROR',
+])
+
 export class PetStateMachine {
   private readonly clock: StateMachineClock
   private readonly minStateMs: number
@@ -67,6 +79,7 @@ export class PetStateMachine {
   private currentSince: number
   private lastActivityAt: number
   private recomputeTimer: unknown | undefined
+  private sleepTimer: unknown | undefined
   private disposed = false
 
   constructor(options: StateMachineOptions = {}) {
@@ -80,6 +93,9 @@ export class PetStateMachine {
     const now = this.clock.now()
     this.currentSince = now
     this.lastActivityAt = now
+    // Arm the quiet-period check so IDLE degrades to SLEEPING even with no
+    // further events (the auto-hide feature depends on this firing).
+    this.scheduleSleepCheck()
   }
 
   get state(): SemanticState {
@@ -103,6 +119,15 @@ export class PetStateMachine {
 
     const isActivity = state !== 'IDLE' && state !== 'SLEEPING'
     if (isActivity) this.lastActivityAt = now
+
+    // An "idle" event (e.g. `agent/status` → idle firing right after a turn
+    // ended) must not clobber a higher-priority transient that is still on
+    // screen — SUCCESS/ERROR flashes, WAITING_FOR_USER, or STARTING. Those
+    // states own their own expiry / terminal transition.
+    const existing = this.tasks.get(taskId)
+    if (state === 'IDLE' && existing !== undefined && IDLE_PROTECTED_STATES.has(existing.state)) {
+      return
+    }
 
     this.tasks.set(taskId, { state, updatedAt: now })
     this.clearExpiry(taskId)
@@ -163,6 +188,22 @@ export class PetStateMachine {
     return best
   }
 
+  /** Re-evaluate the quiet → SLEEPING fallback after the idle window elapses. */
+  private scheduleSleepCheck(): void {
+    if (this.sleepTimer !== undefined) this.clock.clearTimeout(this.sleepTimer)
+    this.sleepTimer = undefined
+    // Only the IDLE state degrades to SLEEPING. Re-arming during an active
+    // state (WORKING etc.) would busy-loop once lastActivityAt is stale, so
+    // active states never arm the sleep timer.
+    if (this.current !== 'IDLE') return
+    const remaining = this.sleepAfterMs - (this.clock.now() - this.lastActivityAt)
+    this.sleepTimer = this.clock.setTimeout(() => {
+      this.sleepTimer = undefined
+      if (this.disposed) return
+      this.recompute()
+    }, Math.max(0, remaining))
+  }
+
   private recompute(): void {
     if (this.disposed) return
     const target = this.targetState()
@@ -174,6 +215,7 @@ export class PetStateMachine {
         this.clock.clearTimeout(this.recomputeTimer)
         this.recomputeTimer = undefined
       }
+      this.scheduleSleepCheck()
       return
     }
 
@@ -185,6 +227,7 @@ export class PetStateMachine {
 
     if (higherOrEqual || heldLongEnough) {
       this.commit(target)
+      this.scheduleSleepCheck()
       return
     }
 
@@ -209,6 +252,10 @@ export class PetStateMachine {
     if (this.recomputeTimer !== undefined) {
       this.clock.clearTimeout(this.recomputeTimer)
       this.recomputeTimer = undefined
+    }
+    if (this.sleepTimer !== undefined) {
+      this.clock.clearTimeout(this.sleepTimer)
+      this.sleepTimer = undefined
     }
     for (const timer of this.expiryTimers.values()) this.clock.clearTimeout(timer)
     this.expiryTimers.clear()

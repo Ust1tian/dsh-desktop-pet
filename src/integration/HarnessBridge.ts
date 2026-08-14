@@ -68,20 +68,24 @@ export function createHarnessBridge(ctx: HarnessContext): HarnessBridge {
     if (started) return Promise.resolve()
     started = true
 
-    // Primary activity stream.
+    // Primary activity stream. `session/event` is dispatched with a
+    // `Scoped<Session>` carrier and context-filtered; `{ global: true }` opts
+    // this listener out of that filter so the (unscoped) pet still receives
+    // every session's events.
     disposers.push(
       ctx.on('session/event', (session: unknown, event: unknown) => {
         const normalized = mapSessionEvent(session, event)
         if (normalized) dispatch(normalized)
-      }),
+      }, { global: true }),
     )
 
-    // Idle detection via agent status changes.
+    // Idle detection via agent status changes. Same scoping note as above:
+    // `agent/status` is dispatched per-agent; a global listener sees all agents.
     disposers.push(
       ctx.on('agent/status', (payload: unknown) => {
         const normalized = mapAgentStatus(payload)
         if (normalized) dispatch(normalized)
-      }),
+      }, { global: true }),
     )
 
     log.debug('bridge started (%s)', Object.keys(capabilities).filter(k => capabilities[k]).join(', ') || 'no optional capabilities')

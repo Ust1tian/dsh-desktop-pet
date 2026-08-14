@@ -68,20 +68,29 @@ export function mapSessionEvent(session: unknown, rawEvent: unknown, timestamp =
       return null
     }
 
+    // A step is one model request: entering it means the model is (about to be)
+    // reasoning, so the pet responds immediately at task start instead of
+    // waiting for the first assistant chunk.
+    case 'step/start':
+      return event(timestamp, 'agent.thinking', sessionId)
+
     case 'tool/call': {
       const data = asRecord(eventRecord.data)
       const toolName = readString(data?.name)
       return event(timestamp, 'tool.started', sessionId, toolName !== undefined ? { toolName } : undefined)
     }
 
+    // A completed tool is not "the whole task is idle": the model usually
+    // continues with more chunks or another tool call. Do NOT emit a state
+    // change here; the next chunk / turn-end / agent-status drives the pet.
     case 'tool/result':
-      return event(timestamp, 'tool.completed', sessionId)
+      return null
 
     case 'command/run':
       return event(timestamp, 'tool.started', sessionId, { toolName: 'command' })
 
     case 'command/done':
-      return event(timestamp, 'tool.completed', sessionId)
+      return null
 
     case 'assistant/chunk': {
       const data = asRecord(eventRecord.data)

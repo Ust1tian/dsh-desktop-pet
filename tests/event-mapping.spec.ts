@@ -28,8 +28,12 @@ describe('event-mapping: mapSessionEvent', () => {
     expect(result).toEqual({ type: 'tool.started', timestamp: 300, sessionId: 's1', metadata: { toolName: 'bash' } })
   })
 
-  it('maps tool/result to tool.completed', () => {
-    expect(mapSessionEvent(session('s1'), { type: 'tool/result', data: {} }, 400)?.type).toBe('tool.completed')
+  it('ignores tool/result (a completed tool is not whole-task idle)', () => {
+    expect(mapSessionEvent(session('s1'), { type: 'tool/result', data: {} }, 400)).toBeNull()
+  })
+
+  it('maps step/start to agent.thinking (task-start reacts immediately)', () => {
+    expect(mapSessionEvent(session('s1'), { type: 'step/start', data: {} }, 1)?.type).toBe('agent.thinking')
   })
 
   it('maps assistant chunks to agent.thinking', () => {
@@ -41,7 +45,6 @@ describe('event-mapping: mapSessionEvent', () => {
 
   it('ignores non-activity session events', () => {
     expect(mapSessionEvent(session('s1'), { type: 'user/message', data: {} }, 1)).toBeNull()
-    expect(mapSessionEvent(session('s1'), { type: 'step/start', data: {} }, 1)).toBeNull()
   })
 
   it('maps approval/asked and approval/decided', () => {

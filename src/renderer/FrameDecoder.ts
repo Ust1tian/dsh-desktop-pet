@@ -75,6 +75,17 @@ export const BASE_CELL = { width: CELL_WIDTH, height: CELL_HEIGHT } as const
  */
 export function rgbaToPremultipliedBgra(frame: PetFrame): Uint8Array {
   const out = new Uint8Array(frame.rgba.length)
+  rgbaToPremultipliedBgraInto(frame, out)
+  return out
+}
+
+/**
+ * Same conversion, writing into a caller-provided `out` buffer (which must be
+ * at least `frame.rgba.length` bytes). The backend pre-allocates `out` once and
+ * reuses it across frames, so the hot render path performs no per-frame
+ * allocation.
+ */
+export function rgbaToPremultipliedBgraInto(frame: PetFrame, out: Uint8Array): void {
   const pixels = frame.width * frame.height
   for (let i = 0; i < pixels; i++) {
     const src = i * 4
@@ -88,5 +99,4 @@ export function rgbaToPremultipliedBgra(frame: PetFrame): Uint8Array {
     out[src + 2] = premultiply(r)
     out[src + 3] = a
   }
-  return out
 }

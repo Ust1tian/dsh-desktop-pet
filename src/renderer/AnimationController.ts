@@ -40,6 +40,7 @@ export class AnimationController {
   private frameIndex = 0
   private playing = false
   private timer: unknown | undefined
+  private resumeState: CodexPetState | undefined
   private disposed = false
 
   constructor(options: AnimationControllerOptions) {
@@ -58,6 +59,7 @@ export class AnimationController {
     if (this.state === state && this.playing) return
     this.state = state
     this.frameIndex = 0
+    this.resumeState = undefined
     this.scheduleNext()
   }
 
@@ -65,7 +67,8 @@ export class AnimationController {
   playTransient(state: CodexPetState, resume: CodexPetState): void {
     this.state = state
     this.frameIndex = 0
-    this.scheduleNext(resume)
+    this.resumeState = resume
+    this.scheduleNext()
   }
 
   start(): void {
@@ -94,7 +97,7 @@ export class AnimationController {
     }
   }
 
-  private scheduleNext(resume?: CodexPetState): void {
+  private scheduleNext(): void {
     if (!this.playing || this.disposed) return
     if (this.timer !== undefined) this.clock.clearTimeout(this.timer)
 
@@ -111,8 +114,10 @@ export class AnimationController {
       if (!this.playing || this.disposed) return
 
       this.frameIndex = (this.frameIndex + 1) % frameCount
-      if (resume !== undefined && this.frameIndex === 0) {
-        this.state = resume
+      if (this.resumeState !== undefined && this.frameIndex === 0) {
+        // The transient has looped once; return to the resume pose.
+        this.state = this.resumeState
+        this.resumeState = undefined
       }
       this.scheduleNext()
     }, duration)

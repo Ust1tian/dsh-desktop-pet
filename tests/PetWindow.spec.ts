@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest'
+import { PetWindow } from '../src/renderer/PetWindow'
+import type { WindowBackend, WindowBackendOptions, WindowHandle } from '../src/renderer/backend/WindowBackend'
+import type { PetFrame } from '../src/renderer/FrameDecoder'
+
+function makeBackend() {
+  const handles: FakeHandle[] = []
+  const backend: WindowBackend = {
+    name: 'fake',
+    isSupported: () => true,
+    async create(opts: WindowBackendOptions): Promise<WindowHandle> {
+      const h = new FakeHandle(opts)
+      handles.push(h)
+      return h
+    },
+  }
+  return { backend, handles }
+}
+
+class FakeHandle implements WindowHandle {
+  shown = true
+  destroyed = false
+  constructor(readonly opts: WindowBackendOptions) {}
+  present(_frame: PetFrame): void {}
+  move(): void {}
+  setAlwaysOnTop(): void {}
+  show(): void { this.shown = true }
+  hide(): void { this.shown = false }
+  destroy(): void { this.destroyed = true }
+}
+
+const atlas = { width: 1536, height: 1872, rgba: new Uint8Array(1536 * 1872 * 4) }
+
+describe('PetWindow live settings', () => {
+  it('setVisible shows/hides without destroying', async () => {
+    const { backend, handles } = makeBackend()
+    const w = new PetWindow({ backend, atlas, scale: 1, alwaysOnTop: true, showStatusBubble: false, animationEnabled: false, idleFrequencySec: 20 })
+    await w.open()
+    expect(handles[0].shown).toBe(true)
+
+    w.setVisible(false)
+    expect(handles[0].shown).toBe(false)
+    expect(handles[0].destroyed).toBe(false)
+
+    w.setVisible(true)
+    expect(handles[0].shown).toBe(true)
+    await w.destroy()
+  })
+
+  it('setScale rebuilds the window at the new size', async () => {
+    const { backend, handles } = makeBackend()
+    const w = new PetWindow({ backend, atlas, scale: 1, alwaysOnTop: true, showStatusBubble: false, animationEnabled: false, idleFrequencySec: 20 })
+    await w.open()
+    expect(handles).toHaveLength(1)
+    expect(handles[0].opts.width).toBe(192)
+
+    await w.setScale(2)
+    expect(handles).toHaveLength(2)
+    expect(handles[0].destroyed).toBe(true)
+    expect(handles[1].opts.width).toBe(384)
+    await w.destroy()
+  })
+
+  it('loadPet rebuilds the window with the new atlas', async () => {
+    const { backend, handles } = makeBackend()
+    const w = new PetWindow({ backend, atlas, scale: 1, alwaysOnTop: true, showStatusBubble: false, animationEnabled: false, idleFrequencySec: 20 })
+    await w.open()
+
+    const atlas2 = { width: 1536, height: 1872, rgba: new Uint8Array(1536 * 1872 * 4).fill(1) }
+    await w.loadPet(atlas2)
+    expect(handles).toHaveLength(2)
+    expect(handles[0].destroyed).toBe(true)
+    await w.destroy()
+  })
+})

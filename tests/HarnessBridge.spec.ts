@@ -4,10 +4,13 @@ import type { NormalizedEvent } from '../src/core/types'
 
 function makeContext(services: Record<string, unknown> = {}) {
   const listeners = new Map<string, Array<(...args: any[]) => any>>()
+  const optionsByEvent = new Map<string, Array<{ prepend?: boolean; global?: boolean } | undefined>>()
   const ctx: HarnessContext = {
-    on: (name, listener) => {
+    on: (name, listener, options) => {
       if (!listeners.has(name)) listeners.set(name, [])
       listeners.get(name)!.push(listener)
+      if (!optionsByEvent.has(name)) optionsByEvent.set(name, [])
+      optionsByEvent.get(name)!.push(options)
       return () => {
         const list = listeners.get(name) ?? []
         const i = list.indexOf(listener)
@@ -17,10 +20,20 @@ function makeContext(services: Record<string, unknown> = {}) {
     get: (name) => services[name],
     logger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }),
   }
-  return { ctx, listeners }
+  return { ctx, listeners, optionsByEvent }
 }
 
 describe('HarnessBridge', () => {
+  it('subscribes globally so scope-filtered harness events still reach the pet', async () => {
+    const { ctx, optionsByEvent } = makeContext()
+    const bridge = createHarnessBridge(ctx)
+    await bridge.start()
+
+    expect(optionsByEvent.get('session/event')?.[0]).toEqual({ global: true })
+    expect(optionsByEvent.get('agent/status')?.[0]).toEqual({ global: true })
+    await bridge.stop()
+  })
+
   it('normalizes session/event into subscribed events', async () => {
     const { ctx, listeners } = makeContext()
     const bridge = createHarnessBridge(ctx)

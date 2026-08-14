@@ -84,10 +84,10 @@ function measure(text: string): number {
 }
 
 /**
- * Render `text` into a new RGBA frame sized to fit, in white with a subtle
- * dark outline for legibility on any desktop background.
+ * Render `text` into a new RGBA frame sized to fit, in the given color (white
+ * by default) with a subtle dark outline for legibility on any background.
  */
-export function renderStatusLabel(text: string): PetFrame {
+export function renderStatusLabel(text: string, color: readonly [number, number, number] = [255, 255, 255]): PetFrame {
   const width = measure(text)
   const height = GLYPH_HEIGHT
   const rgba = new Uint8Array(width * height * 4)
@@ -107,9 +107,7 @@ export function renderStatusLabel(text: string): PetFrame {
       const bits = rows[y] ?? 0
       for (let x = 0; x < GLYPH_WIDTH; x++) {
         if (bits & (1 << (GLYPH_WIDTH - 1 - x))) {
-          drawPixel(cursor + x, y, 255, 255, 255, 255)
-        } else if ((bits & (1 << (GLYPH_WIDTH - 1 - x))) === 0 && x > 0 && y > 0) {
-          // No-op; outline is drawn below for legibility.
+          drawPixel(cursor + x, y, color[0], color[1], color[2], 255)
         }
       }
     }
@@ -120,32 +118,45 @@ export function renderStatusLabel(text: string): PetFrame {
 }
 
 /**
- * Composite a status label centered under a pet frame, expanding the frame
- * vertically to hold the bubble. Returns a new frame; the input is unchanged.
+ * Composite a status label centered under a pet frame onto a fixed-size canvas.
+ *
+ * The pet occupies the top `pet.height` rows; when `text` is non-empty the
+ * bubble is drawn in the rows below it. The result is always exactly
+ * `canvasWidth × canvasHeight` (defaulting to the pet's own size), so the
+ * backend can render it straight into a window whose DIB was sized to match —
+ * a frame that grows beyond the window is what previously made
+ * `UpdateLayeredWindow` fail and freeze the pet on the last good (idle) frame.
  */
-export function compositeStatusBubble(pet: PetFrame, text: string): PetFrame {
-  if (text === '') return pet
+export function compositeStatusBubble(
+  pet: PetFrame,
+  text: string,
+  canvasWidth: number = pet.width,
+  canvasHeight: number = pet.height,
+): PetFrame {
+  const outWidth = canvasWidth
+  const outHeight = canvasHeight
+  const rgba = new Uint8Array(outWidth * outHeight * 4)
+
+  // Copy pet frame centered horizontally, at the top.
+  const petX = Math.floor((outWidth - pet.width) / 2)
+  for (let y = 0; y < pet.height && y < outHeight; y++) {
+    const srcStart = y * pet.width * 4
+    const dstStart = (y * outWidth + petX) * 4
+    rgba.set(pet.rgba.subarray(srcStart, srcStart + pet.width * 4), dstStart)
+  }
+
+  if (text === '') return { width: outWidth, height: outHeight, rgba }
+
   const label = renderStatusLabel(text)
   const padX = Math.max(6, Math.floor(label.width / 2) + 6)
   const bubbleWidth = label.width + padX * 2
   const bubbleHeight = label.height + 6
 
-  const outWidth = Math.max(pet.width, bubbleWidth)
-  const outHeight = pet.height + bubbleHeight
-  const rgba = new Uint8Array(outWidth * outHeight * 4)
-
-  // Copy pet frame centered horizontally, at the top.
-  const petX = Math.floor((outWidth - pet.width) / 2)
-  for (let y = 0; y < pet.height; y++) {
-    const srcStart = y * pet.width * 4
-    const dstStart = ((y) * outWidth + petX) * 4
-    rgba.set(pet.rgba.subarray(srcStart, srcStart + pet.width * 4), dstStart)
-  }
-
   // Draw bubble background (semi-opaque dark rounded rect).
   const bubbleX = Math.floor((outWidth - bubbleWidth) / 2)
   const bubbleY = pet.height + 2
   const bg = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= outWidth || y >= outHeight) return
     const i = (y * outWidth + x) * 4
     rgba[i] = 30
     rgba[i + 1] = 30
@@ -168,7 +179,10 @@ export function compositeStatusBubble(pet: PetFrame, text: string): PetFrame {
     for (let x = 0; x < label.width; x++) {
       const s = (y * label.width + x) * 4
       if (label.rgba[s + 3] !== 0) {
-        const d = ((labelY + y) * outWidth + labelX + x) * 4
+        const dx = labelX + x
+        const dy = labelY + y
+        if (dx < 0 || dy < 0 || dx >= outWidth || dy >= outHeight) continue
+        const d = (dy * outWidth + dx) * 4
         rgba[d] = label.rgba[s]
         rgba[d + 1] = label.rgba[s + 1]
         rgba[d + 2] = label.rgba[s + 2]

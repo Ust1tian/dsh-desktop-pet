@@ -49,9 +49,17 @@ describe('PetStateMachine', () => {
     machine.onEvent(evt('session.idle', 'a'))
     expect(machine.state).toBe('IDLE')
     advance(5000)
-    // The machine only re-resolves on an input; feed another idle event.
-    machine.onEvent(evt('session.idle', 'a'))
+    // The sleep timer fires on its own (no further event required).
     expect(machine.state).toBe('SLEEPING')
+  })
+
+  it('wakes from SLEEPING on activity', () => {
+    const { clock, advance } = createFakeClock()
+    const machine = new PetStateMachine({ clock, sleepAfterMs: 5000 })
+    advance(5000)
+    expect(machine.state).toBe('SLEEPING')
+    machine.onEvent(evt('tool.started', 'a'))
+    expect(machine.state).toBe('WORKING')
   })
 
   it('suppresses duplicate transitions (no onChange spam)', () => {
