@@ -1,0 +1,72 @@
+# Publish dsh-desktop-pet to npm.
+#
+# Triggered when a v* tag is pushed (created locally with `npm version`), and
+# via manual dispatch as a backup. Publishing only runs when the tag's commit
+# is on `master`: GitHub Actions cannot express "v* tag on master" directly in
+# the `on:` triggers, so the tag-triggered run verifies ancestry in a job step
+# and skips publication for tags on other branches.
+#
+# Publishing uses npm Trusted Publishing (OIDC): GitHub mints an id token and
+# npm publishes on its behalf, so no NODE_AUTH_TOKEN secret is needed. The
+# package must already exist on npm (see README "Publishing") and have
+# Trusted Publishing enabled for this repository.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required so GitHub can mint the OIDC token npm's Trusted Publishing trusts.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check tag commit is on master
+        run: |
+          git fetch origin master --depth=1
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "MASTER_TAG=1" >> "$GITHUB_ENV"
+            echo "Tag commit is on master; publishing."
+          else
+            echo "MASTER_TAG=0" >> "$GITHUB_ENV"
+            echo "Tag commit is not on master; skipping publish."
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (host)
+        run: npm run typecheck
+
+      - name: Typecheck (client)
+        run: npm run typecheck:client
+
+      - name: Test
+        run: npm test
+
+      - name: Build (host + client)
+        run: npm run build
+
+      - name: Verify publish contents
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        if: env.MASTER_TAG == '1'
+        run: npm publish --provenance --access public

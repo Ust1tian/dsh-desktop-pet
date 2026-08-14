@@ -252,6 +252,36 @@ The pet core is tested without a harness or a display. The native overlay backen
 
 ---
 
+## Publishing
+
+Publishing to npm is automated with GitHub Actions via **npm Trusted
+Publishing** (OIDC): GitHub mints an id token and npm publishes on its behalf,
+so the workflow needs no `NODE_AUTH_TOKEN` secret. A `v*` tag pushed to
+`master` triggers `npm ci → typecheck → test → build → npm publish
+--provenance`.
+
+**One-time setup on npm** (do this before the first tag push):
+
+1. The package must already exist on npm. Publish `0.1.0` once with a manual
+   token (`npm publish --access public`) — Trusted Publishing is configured per
+   package, so an npmjs package page must exist first.
+2. On the npmjs package page, enable **Trusted Publishing** and authorize this
+   repository: owner `sereinmono`, repository `dsh-desktop-pet`. Pin the
+   workflow `publish.yml` and branch `master` if the form offers it.
+
+**Release locally** — bump the version, tag, and push the tag:
+
+```sh
+npm version patch   # or minor / major; creates vX.Y.Z tag
+git push origin master --tags
+```
+
+The workflow runs only when the tag's commit is on `master`; tags on other
+branches are skipped. A manual backup entry is available at
+Actions → Publish → Run workflow (the tag must still be on `master`).
+
+---
+
 ## Known limitations
 
 - **Linux transparency requires a compositor**; on Wayland the pet runs as an XWayland client (no native wlr-layer-shell).

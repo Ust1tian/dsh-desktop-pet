@@ -233,6 +233,26 @@ npm run gen:assets      # 重新生成内置的 text 宠物
 
 ---
 
+## 发布
+
+发布到 npm 已由 GitHub Actions 通过 **npm Trusted Publishing（OIDC）** 自动化：GitHub 签发 id token，npm 据此代表仓库发布，因此工作流**无需 `NODE_AUTH_TOKEN` secret**。向 `master` 推送 `v*` tag 会触发 `npm ci → typecheck → test → build → npm publish --provenance`。
+
+**在 npm 上的一次性配置**（首次推送 tag 之前完成）：
+
+1. 该包必须已存在于 npm。先用手动 token 发布一次 `0.1.0`（`npm publish --access public`）——Trusted Publishing 是按包配置的，所以必须先有 npmjs 包页面。
+2. 在 npmjs 包页面启用 **Trusted Publishing** 并授权本仓库：owner `sereinmono`、repository `dsh-desktop-pet`。若表单允许，可将 workflow 固定为 `publish.yml`、分支固定为 `master`。
+
+**本地发布** —— 提升版本、打 tag 并推送 tag：
+
+```sh
+npm version patch   # 或 minor / major；会创建 vX.Y.Z tag
+git push origin master --tags
+```
+
+工作流只在 tag 指向的提交位于 `master` 上时发布；其他分支的 tag 会被跳过。手动备份入口在 Actions → Publish → Run workflow（该 tag 仍须位于 `master`）。
+
+---
+
 ## 已知限制
 
 - **Linux 透明需要合成器**；在 Wayland 上宠物作为 XWayland 客户端运行（无原生 wlr-layer-shell）。
