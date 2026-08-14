@@ -16,21 +16,58 @@
 
 ## 安装
 
-插件是一个同时包含宿主半（宠物窗口）和客户端半（设置卡片）的 Cordis **组合包**。用下面的命令安装进 profile：
+插件是一个同时包含宿主半（宠物窗口）和客户端半（设置卡片）的 Cordis **组合包**。`dsh plugin add` 会安装它，并因清单里声明了 `dsh.bundle` 而自动把它加入 profile 的 bundle 列表。
+
+### 从本地目录安装
+
+直接从插件源码目录安装（profile 会把它作为 `link:` 依赖保留）：
 
 ```sh
-dsh plugin --profile <name> add ./dsh-desktop-pet
+dsh plugin --profile <name> add /path/to/dsh-desktop-pet
 ```
 
-（从源码检出运行时，用 `pnpm dsh plugin --profile <name> add ./dsh-desktop-pet`。）然后运行：
+Windows 下示例：
+
+```sh
+dsh plugin --profile web add D:/deepseek-pet
+```
+
+也可以在插件目录内执行 `dsh plugin --profile <name> add .`。
+
+### 从 tarball 安装
+
+先打包，再安装 tarball：
+
+```sh
+npm pack
+dsh plugin --profile <name> add /path/to/dsh-desktop-pet-0.1.0.tgz
+```
+
+### 从 npm 安装
+
+插件发布到 npm registry 后：
+
+```sh
+dsh plugin --profile <name> add dsh-desktop-pet
+```
+
+### 从 Git 仓库安装
+
+```sh
+dsh plugin --profile <name> add github:sereinmono/dsh-desktop-pet
+```
+
+如果仓库未提交构建产物，请配置 `prepare` 脚本，让 `dsh plugin add` 在安装时构建插件。
+
+### 运行
 
 ```sh
 dsh --profile <name>
 ```
 
-`dsh plugin add` 会安装包；由于清单里声明了 `dsh.bundle`，它还会自动把插件加入 profile 的 bundle 列表。
+> 如果你是从 harness 仓库源码运行，请在 harness 仓库目录内把上面的命令加上 `pnpm` 前缀——即执行 `pnpm dsh plugin ...` 与 `pnpm dsh ...`。
 
-> 如果你克隆了 harness 仓库并从源码运行，请给 `dsh` 命令加上 `pnpm` 前缀（见 harness `README` 的 run-from-source 章节）。
+> 设置卡片需要 harness 暴露 `desktop-pet` 设置命名空间（通过其 `WEB_SETTINGS_NAMESPACES` 白名单）；宠物窗口本身不依赖该白名单。
 
 ### 启用 / 停用
 
@@ -79,7 +116,6 @@ Linux 的逐像素透明需要一个运行中的合成器（GNOME/KDE 默认自�
 | `clickThrough` | `false` | 让指针事件穿透（仅 Windows）。 |
 | `startSleeping` | `false` | 以睡眠状态启动。 |
 | `animationSpeed` | `1` | 全局速度倍率（0.25–4）。 |
-| `petPath` | `null` | 含 `pet.json` + 精灵图的外部目录（覆盖 `assets/pets/`）。 |
 
 示例：
 

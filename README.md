@@ -16,25 +16,68 @@ It is **not** a second chat UI, a task manager, or a full desktop app. It is a s
 
 ## Installation
 
-The plugin is a Cordis **bundle** that ships both a host half (the pet window) and
-a client half (the settings card). Install it into a profile:
+The plugin is a Cordis **bundle** that ships both a host half (the pet window)
+and a client half (the settings card). `dsh plugin add` installs it and, because
+the manifest declares `dsh.bundle`, adds it to the profile's bundle list
+automatically.
+
+### From a local directory
+
+Install the plugin directly from its source directory (the profile keeps it as
+a `link:` dependency):
 
 ```sh
-dsh plugin --profile <name> add ./dsh-desktop-pet
+dsh plugin --profile <name> add /path/to/dsh-desktop-pet
 ```
 
-(Or `pnpm dsh plugin --profile <name> add ./dsh-desktop-pet` when running from a
-source checkout.) Then run:
+On Windows, for example:
+
+```sh
+dsh plugin --profile web add D:/deepseek-pet
+```
+
+You can also run `dsh plugin --profile <name> add .` from inside the plugin
+directory.
+
+### From a tarball
+
+Pack the plugin, then install the tarball:
+
+```sh
+npm pack
+dsh plugin --profile <name> add /path/to/dsh-desktop-pet-0.1.0.tgz
+```
+
+### From npm
+
+After the plugin is published to the npm registry:
+
+```sh
+dsh plugin --profile <name> add dsh-desktop-pet
+```
+
+### From a Git repository
+
+```sh
+dsh plugin --profile <name> add github:sereinmono/dsh-desktop-pet
+```
+
+If the repository does not commit build artifacts, configure a `prepare`
+script so `dsh plugin add` builds the plugin during install.
+
+### Run
 
 ```sh
 dsh --profile <name>
 ```
 
-`dsh plugin add` installs the package and, because the manifest declares
-`dsh.bundle`, adds it to the profile's bundle list automatically.
+> If you are running Harness from a source checkout, prefix the commands above
+> with `pnpm` — i.e. run `pnpm dsh plugin ...` and `pnpm dsh ...` from the
+> Harness repository.
 
-> If you cloned the harness repo and run from source, prefix `dsh` commands with
-> `pnpm` (see the harness `README` run-from-source section).
+> The settings card requires Harness to expose the `desktop-pet` settings
+> namespace (via its `WEB_SETTINGS_NAMESPACES` allowlist). The pet window itself
+> does not depend on that allowlist.
 
 ### Enable / disable
 
@@ -89,7 +132,6 @@ All fields are optional and validated with a Schemastery schema (invalid values 
 | `clickThrough` | `false` | Pass pointer events through (Windows only). |
 | `startSleeping` | `false` | Start in the sleeping state. |
 | `animationSpeed` | `1` | Global speed multiplier (0.25–4). |
-| `petPath` | `null` | External directory containing `pet.json` + a sprite sheet (overrides `assets/pets/`). |
 
 Example:
 

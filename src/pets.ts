@@ -1,6 +1,6 @@
 /**
  * Host-side pet catalog: scans the bundled `assets/pets/` directory at startup
- * and loads a pet directory (bundled or custom `petPath`) into a decoded atlas.
+ * and loads a pet directory into a decoded atlas.
  */
 
 import { fileURLToPath } from 'node:url'
@@ -62,17 +62,8 @@ function toAtlas(loaded: LoadedPet): AtlasBuffer {
   return { width: loaded.atlasWidth, height: loaded.atlasHeight, rgba: loaded.rgba }
 }
 
-/**
- * Resolve the directory a pet is loaded from: an explicit custom `petPath`
- * (hatch-pet output) wins; otherwise the bundled `assets/pets/<petId>`.
- */
-export function resolvePetDirectory(petPath: string | null, petId: string): string {
-  if (petPath) return petPath
-  return join(ASSETS_DIR, petId)
-}
-
-/** Load a pet by id into an atlas. */
-export async function loadPetAtlas(petId: string, petPath: string | null): Promise<AtlasBuffer> {
-  const loaded = await loadPet({ directory: resolvePetDirectory(petPath, petId) })
+/** Load a pet by id (a directory name under `assets/pets/`) into an atlas. */
+export async function loadPetAtlas(petId: string): Promise<AtlasBuffer> {
+  const loaded = await loadPet({ directory: join(ASSETS_DIR, petId) })
   return toAtlas(loaded)
 }

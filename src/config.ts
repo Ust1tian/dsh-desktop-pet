@@ -31,7 +31,7 @@ export interface PetSettings {
   enabled: boolean
   /** Integer scale multiplier applied to the 192×208 atlas cells. */
   petScale: number
-  /** Which pet to display (a directory under `assets/pets/`, or a custom `petPath`). */
+  /** Which pet to display (a directory name under `assets/pets/`). */
   petId: string
   /** Hide the pet while no task is running; show it again on activity. */
   hideWhenIdle: boolean
@@ -61,7 +61,7 @@ export interface PetConfig {
   alwaysOnTop: boolean
   /** Integer scale multiplier applied to the 192×208 atlas cells. */
   petScale: number
-  /** Which pet to display (a directory under `assets/pets/`, or a custom `petPath`). */
+  /** Which pet to display (a directory name under `assets/pets/`). */
   petId: string
   /** Hide the pet while no task is running; show it again on activity. */
   hideWhenIdle: boolean
@@ -77,8 +77,6 @@ export interface PetConfig {
   startSleeping: boolean
   /** Global animation speed multiplier. */
   animationSpeed: number
-  /** Directory containing a `pet.json` + sprite sheet (hatch-pet output). */
-  petPath: string | null
 }
 
 export const Config: z<PetConfig> = z.object({
@@ -93,7 +91,6 @@ export const Config: z<PetConfig> = z.object({
   clickThrough: z.boolean().default(false),
   startSleeping: z.boolean().default(false),
   animationSpeed: z.number().min(0.25).max(4).default(1),
-  petPath: z.union([z.string(), z.const(null)]).default(null),
 })
 
 export const DEFAULT_CONFIG: PetConfig = {
@@ -108,5 +105,4 @@ export const DEFAULT_CONFIG: PetConfig = {
   clickThrough: false,
   startSleeping: false,
   animationSpeed: 1,
-  petPath: null,
 }

@@ -95,7 +95,6 @@ export function apply(ctx: Context, config: PetConfig): void {
      * catalog entry instead of failing the whole renderer.
      */
     function effectivePetId(petId: string): string {
-      if (config.petPath) return petId
       if (catalog.some(entry => entry.id === petId)) return petId
       return catalog[0]?.id ?? 'text'
     }
@@ -104,7 +103,7 @@ export function apply(ctx: Context, config: PetConfig): void {
     async function reconcile(settings: PetSettingsSnapshot): Promise<void> {
       const seq = ++reconcileSeq
       const petId = effectivePetId(settings.petId)
-      const petKey = config.petPath ?? petId
+      const petKey = petId
 
       if (window) {
         applyVisibility(machine?.state)
@@ -112,7 +111,7 @@ export function apply(ctx: Context, config: PetConfig): void {
         if (petKey !== loadedPetKey) {
           loadedPetKey = petKey
           try {
-            const atlas = await loadPetAtlas(petId, config.petPath)
+            const atlas = await loadPetAtlas(petId)
             if (disposed || seq !== reconcileSeq) return
             await window.loadPet(atlas)
           } catch (error) {
@@ -126,7 +125,7 @@ export function apply(ctx: Context, config: PetConfig): void {
       loadedPetKey = petKey
       let atlas
       try {
-        atlas = await loadPetAtlas(petId, config.petPath)
+        atlas = await loadPetAtlas(petId)
       } catch (error) {
         log.warn('failed to load pet assets; renderer disabled: %s', (error as Error)?.message ?? String(error))
         return

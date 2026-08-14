@@ -6,8 +6,7 @@ This guide explains how to add a new desktop pet to **dsh-desktop-pet**.
 
 A pet is a directory containing a manifest (`pet.json`) and a sprite sheet
 (`spritesheet.webp` or `spritesheet.png`). The plugin scans `assets/pets/` at
-startup and lists every discovered pet in the settings picker; it can also be
-pointed at an external directory via `petPath`.
+startup and lists every discovered pet in the settings picker.
 
 ## Ways to add a pet
 
@@ -147,6 +146,3 @@ cell at `x = i * 192`, `y = r * 208`.
 - The bundled `text` pet is intentionally the only shipped pet. It renders each
   state as a distinct colour and label, which is useful for verifying that the
   pet's appearance follows the harness task state.
-- As an alternative to copying, `petPath` can point directly at an external
-  directory (for example a hatch-pet or Petdex output), which takes precedence
-  over the `assets/pets/` catalog.
