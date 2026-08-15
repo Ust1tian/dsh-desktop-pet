@@ -10,10 +10,21 @@
         enabled: true
         alwaysOnTop: true
         petScale: 1
-        petId: text
+        petId: deepseek
         hideWhenIdle: false
         animationEnabled: true
         idleFrequencySec: 20
         clickThrough: false
         startSleeping: false
         animationSpeed: 1
+        # --- 气泡（实时思考过程 / 状态提示） ---
+        bubbleEnabled: true
+        bubbleMaxChars: 80
+        bubbleSeconds: 6
+        confirmBubbleText: '⚠ 需要你的确认'
+        successBubbleText: '✓ 完成！'
+        errorBubbleText: '✗ 出错了'
+        # --- 音效（文件放在插件 assets/sounds/ 下，WAV 格式；留空不播放） ---
+        soundSuccess: ''
+        soundError: ''
+        soundConfirm: ''

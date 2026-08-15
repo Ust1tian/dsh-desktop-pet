@@ -17,6 +17,14 @@ import { SEMANTIC_TO_CODEX } from '../core/types'
 import { AnimationController, type AnimationClock } from './AnimationController'
 import type { AtlasBuffer } from './FrameDecoder'
 import type { WindowBackend, WindowBackendOptions, WindowHandle } from './backend/WindowBackend'
+import type { Win32Bubble } from './backend/Win32Bubble'
+
+export type BubbleKind = 'think' | 'confirm' | 'success' | 'error'
+
+export interface BubbleMessage {
+  text: string
+  kind?: BubbleKind
+}
 
 export interface PetWindowOptions {
   backend: WindowBackend
@@ -26,6 +34,8 @@ export interface PetWindowOptions {
   animationEnabled: boolean
   /** Seconds between idle variations (transient wave/hop). */
   idleFrequencySec: number
+  /** 气泡总开关（false 时完全禁用气泡窗口）。 */
+  bubbleEnabled?: boolean
   position?: { x: number; y: number } | null
   clickThrough?: boolean
   clock?: AnimationClock
@@ -53,6 +63,7 @@ export class PetWindow {
   private readonly backend: WindowBackend
   private readonly animationEnabled: boolean
   private readonly idleFrequencySec: number
+  private readonly bubbleEnabled: boolean
   private readonly clickThrough: boolean
   private readonly clock: AnimationClock
   private readonly random: () => number
@@ -70,7 +81,10 @@ export class PetWindow {
 
   private handle: WindowHandle | undefined
   private controller: AnimationController | undefined
+  private bubble: Win32Bubble | undefined
   private idleTimer: unknown | undefined
+  private bubbleThrottleTimer: unknown | undefined
+  private pendingBubble: BubbleMessage | null = null
   private semantic: SemanticState = 'IDLE'
   private visible = true
   private opened = false
@@ -84,6 +98,7 @@ export class PetWindow {
     this.scale = options.scale
     this.animationEnabled = options.animationEnabled
     this.idleFrequencySec = options.idleFrequencySec
+    this.bubbleEnabled = options.bubbleEnabled ?? true
     this.clickThrough = options.clickThrough ?? false
     this.clock = options.clock ?? { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) }
     this.random = options.random ?? Math.random
@@ -118,6 +133,7 @@ export class PetWindow {
         this.currentX = x
         this.currentY = y
         this.onDrag?.(x, y)
+        this.repositionBubble()
       },
       onDragMove: (direction) => {
         this.beginDrag(direction)
@@ -136,6 +152,17 @@ export class PetWindow {
       },
     }
     this.handle = await this.backend.create(opts)
+
+    // 气泡窗口：仅 Windows 且开启气泡时创建；失败则静默降级（无气泡不影响宠物）。
+    if (this.bubbleEnabled && process.platform === 'win32') {
+      try {
+        const { getBindings } = await import('./backend/Win32Backend')
+        const bindings = await getBindings()
+        this.bubble = new (await import('./backend/Win32Bubble')).Win32Bubble(bindings, this.currentX, this.currentY)
+      } catch {
+        this.bubble = undefined
+      }
+    }
 
     this.controller = new AnimationController({
       atlas: this.atlas,
@@ -182,8 +209,65 @@ export class PetWindow {
   setVisible(visible: boolean): void {
     this.visible = visible
     if (this.destroyed || !this.handle) return
-    if (visible) this.handle.show()
-    else this.handle.hide()
+    if (visible) {
+      this.handle.show()
+      if (this.bubble?.hasText) this.bubble.show()
+    } else {
+      this.handle.hide()
+      this.bubble?.hide()
+    }
+  }
+
+  /**
+   * 更新气泡内容。`think`（思考过程）文本高频累积，做 150ms 节流并只保留
+   * 最新内容；成功/出错/确认等状态气泡立即显示。传 `null` 隐藏气泡。
+   */
+  setBubble(message: BubbleMessage | null): void {
+    if (this.destroyed || !this.bubbleEnabled) return
+    if (message === null) {
+      if (this.bubbleThrottleTimer !== undefined) {
+        this.clock.clearTimeout(this.bubbleThrottleTimer)
+        this.bubbleThrottleTimer = undefined
+      }
+      this.pendingBubble = null
+      this.bubble?.setText(null)
+      return
+    }
+    const kind: BubbleKind = message.kind ?? 'think'
+    if (kind === 'think') {
+      this.pendingBubble = { text: message.text, kind }
+      if (this.bubbleThrottleTimer !== undefined) return
+      this.bubbleThrottleTimer = this.clock.setTimeout(() => {
+        this.bubbleThrottleTimer = undefined
+        if (this.destroyed) return
+        const pending = this.pendingBubble
+        this.pendingBubble = null
+        if (pending) {
+          this.bubble?.setText(pending)
+          this.repositionBubble()
+        }
+      }, 150)
+      return
+    }
+    // 状态类气泡：立即显示，并取消挂起的思考气泡。
+    if (this.bubbleThrottleTimer !== undefined) {
+      this.clock.clearTimeout(this.bubbleThrottleTimer)
+      this.bubbleThrottleTimer = undefined
+    }
+    this.pendingBubble = null
+    this.bubble?.setText({ text: message.text, kind })
+    this.repositionBubble()
+  }
+
+  /** 把气泡定位到宠物上方居中（贴屏幕顶时放到宠物下方）。 */
+  private repositionBubble(): void {
+    if (!this.bubble || !this.handle) return
+    const petW = Math.max(1, Math.round(BASE_WIDTH * this.scale))
+    const petH = Math.max(1, Math.round(BASE_HEIGHT * this.scale))
+    const x = this.currentX + (petW - this.bubble.bubbleWidth) / 2
+    let y = this.currentY - this.bubble.bubbleHeight - 6
+    if (y < 0) y = this.currentY + petH + 6
+    this.bubble.setPosition(x, y)
   }
 
   /** Resize the pet by rebuilding the window to the new scale. */
@@ -274,6 +358,13 @@ export class PetWindow {
 
   private teardownWindow(): void {
     this.cancelIdleVariation()
+    if (this.bubbleThrottleTimer !== undefined) {
+      this.clock.clearTimeout(this.bubbleThrottleTimer)
+      this.bubbleThrottleTimer = undefined
+    }
+    this.pendingBubble = null
+    this.bubble?.destroy()
+    this.bubble = undefined
     this.controller?.dispose()
     this.controller = undefined
     try {

@@ -97,6 +97,11 @@ export function mapSessionEvent(session: unknown, rawEvent: unknown, timestamp =
       const chunk = asRecord(data?.chunk)
       const chunkType = readString(chunk?.type)
       if (chunkType === 'text-delta' || chunkType === 'reasoning-delta' || chunkType === 'tool-call-delta') {
+        // 增量文本（可能缺失）：用于桌宠气泡实时展示思考过程。
+        const text = readString(chunk?.text) ?? readString(data?.text)
+        if (text !== undefined && text.length > 0) {
+          return event(timestamp, 'agent.thinking', sessionId, { text })
+        }
         return event(timestamp, 'agent.thinking', sessionId)
       }
       return null

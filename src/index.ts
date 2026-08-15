@@ -23,6 +23,7 @@ import { createHarnessBridge, type HarnessBridge, type HarnessContext } from './
 import { loadPosition, savePosition } from './persistence'
 import { loadPetAtlas, scanPets } from './pets'
 import { installPetSettings, type PetSettingsHandle, type PetSettingsRegistrar, type PetSettingsSnapshot } from './settings'
+import { playSound } from './sounds'
 import { PetWindow } from './renderer/PetWindow'
 import { selectBackend } from './renderer/backend/selectBackend'
 
@@ -72,6 +73,58 @@ export function apply(ctx: Context, config: PetConfig): void {
     let catalog: PetSettingsSnapshot['availablePets'] = []
     let loadedPetKey: string | null = null
     let reconcileSeq = 0
+
+    // --- 气泡与音效状态 ---------------------------------------------------
+    /** 当前回合累积的思考文本（超出 bubbleMaxChars 时保留最新内容）。 */
+    let thinkingText = ''
+    /** 结果类气泡（成功/出错/确认）的自动隐藏定时器。 */
+    let bubbleTimer: unknown | undefined
+
+    /** 活动状态（思考/工作中）：气泡显示实时思考文本。 */
+    const ACTIVE_STATES: ReadonlySet<SemanticState> = new Set([
+      'THINKING', 'WORKING', 'CODING', 'RUNNING_COMMAND',
+    ])
+
+    /** 状态变化时更新气泡与音效（成功/出错/确认有专属提示）。 */
+    function onStateBubble(state: SemanticState): void {
+      if (!config.bubbleEnabled) return
+      if (bubbleTimer !== undefined) {
+        clearTimeout(bubbleTimer as ReturnType<typeof setTimeout>)
+        bubbleTimer = undefined
+      }
+      if (ACTIVE_STATES.has(state)) {
+        // 思考/工作中：显示聚合的思考文本；还没有文本时显示占位。
+        if (thinkingText.length > 0) {
+          window?.setBubble({ text: thinkingText, kind: 'think' })
+        } else {
+          window?.setBubble({ text: state === 'THINKING' ? '思考中…' : '工作中…', kind: 'think' })
+        }
+        return
+      }
+      if (state === 'WAITING_FOR_USER') {
+        thinkingText = ''
+        window?.setBubble({ text: config.confirmBubbleText, kind: 'confirm' })
+        playSound(config.soundConfirm)
+      } else if (state === 'SUCCESS') {
+        thinkingText = ''
+        window?.setBubble({ text: config.successBubbleText, kind: 'success' })
+        playSound(config.soundSuccess)
+      } else if (state === 'ERROR') {
+        thinkingText = ''
+        window?.setBubble({ text: config.errorBubbleText, kind: 'error' })
+        playSound(config.soundError)
+      } else {
+        // IDLE / SLEEPING / STARTING：清空气泡与思考文本。
+        thinkingText = ''
+        window?.setBubble(null)
+        return
+      }
+      // 结果类气泡显示 bubbleSeconds 秒后自动隐藏。
+      bubbleTimer = setTimeout(() => {
+        bubbleTimer = undefined
+        window?.setBubble(null)
+      }, config.bubbleSeconds * 1000)
+    }
 
     /** Whether the window should be visible given the current state + settings. */
     function shouldBeVisible(state: SemanticState | undefined): boolean {
@@ -146,6 +199,7 @@ export function apply(ctx: Context, config: PetConfig): void {
           alwaysOnTop: config.alwaysOnTop,
           animationEnabled: config.animationEnabled,
           idleFrequencySec: config.idleFrequencySec,
+          bubbleEnabled: config.bubbleEnabled,
           clickThrough: config.clickThrough,
           position: loadPosition(),
           onDrag: (x, y) => savePosition({ x, y }),
@@ -206,11 +260,22 @@ export function apply(ctx: Context, config: PetConfig): void {
         }
         // Auto-hide reacts to the machine's SLEEPING transitions.
         applyVisibility(state)
+        // 气泡与音效跟随状态。
+        onStateBubble(state)
       },
     })
     unsubscribe = bridge.subscribe((event: NormalizedEvent) => {
       if (disposed) return
       machine?.onEvent(event)
+      // 思考文本聚合：仅当桌宠处于活动状态时累积，供气泡实时展示。
+      const chunkText = event.metadata?.text
+      if (typeof chunkText === 'string' && chunkText.length > 0) {
+        const state = machine?.state
+        if (state !== undefined && ACTIVE_STATES.has(state)) {
+          thinkingText = (thinkingText + chunkText).slice(-config.bubbleMaxChars)
+          window?.setBubble({ text: thinkingText, kind: 'think' })
+        }
+      }
     })
 
     // Register the optional /pet debug command.
@@ -245,6 +310,10 @@ export function apply(ctx: Context, config: PetConfig): void {
     // Teardown (async so Cordis awaits window/native cleanup).
     return async () => {
       disposed = true
+      if (bubbleTimer !== undefined) {
+        clearTimeout(bubbleTimer as ReturnType<typeof setTimeout>)
+        bubbleTimer = undefined
+      }
       settingsHandle?.dispose()
       unsubscribe?.()
       unregisterCommand?.()

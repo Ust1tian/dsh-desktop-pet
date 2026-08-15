@@ -2,6 +2,10 @@
 
 English | [中文](README.zh.md)
 
+> **Fork 增强版**：本项目在 [sereinmono/dsh-desktop-pet](https://github.com/sereinmono/dsh-desktop-pet)
+> 基础上增强：实时思考气泡（最多两行）、等待确认的高亮气泡提示、成功/出错/确认音效（WAV），
+> 并预置 **DeepSeek娘（蓝发鲸鱼女仆）** 桌宠图集。
+
 An **optional desktop companion** for [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness). It shows a small animated pet as an ambient status indicator: the pet relaxes when the harness is idle, "thinks" while the model reasons, "works" while tools run, waits when the harness needs input, and celebrates (or frowns) when a turn finishes.
 
 It is **not** a second chat UI, a task manager, or a full desktop app. It is a status indicator.
@@ -10,6 +14,16 @@ It is **not** a second chat UI, a task manager, or a full desktop app. It is a s
 - **Zero network**: all assets ship with the plugin; no telemetry, CDN, or remote service.
 - **Zero added LLM cost**: event → state resolution is fully deterministic.
 - **Runtime-discovered pets**: pets under `assets/pets/` are discovered at startup, so adding a pet is dropping a folder in — no rebuild.
+
+## Assets you need to fetch yourself
+
+- **DeepSeek娘 图集**（`assets/pets/deepseek/`）：
+  [xpy12367/codex-pet-DeepSeek-girl](https://github.com/xpy12367/codex-pet-DeepSeek-girl)
+  （非官方同人，仓库未声明开源许可，故本仓库不随包分发）。下载后把根目录的
+  `pet.json` + `spritesheet.webp` 放进 `assets/pets/deepseek/` 即可；没有图集时
+  插件会自动回退到内置 `text` 测试宠。
+- **音效**（`assets/sounds/`）：任意 PCM WAV，放入后在 `cordis.patch.yml` 的
+  `soundSuccess` / `soundError` / `soundConfirm` 里填文件名即可（默认留空不播放）。
 
 ---
 
@@ -233,6 +247,34 @@ checking and bundling).
 - **Adding a pet** — see [Adding a Pet](docs/adding-a-pet.md); no code change is required.
 - **Adding an animation state** — extend `SemanticState` in `src/core/types.ts`, its resolver mapping in `src/core/PetStateResolver.ts`, and its renderer pose in `SEMANTIC_TO_CODEX`.
 - **Adding a window backend** — implement `WindowBackend` (`src/renderer/backend/WindowBackend.ts`) and register it in `src/renderer/backend/selectBackend.ts`.
+
+---
+
+## Speech bubbles & sounds
+
+The pet shows a text bubble above the window (Windows only):
+
+- **Thinking bubble**: while the model reasons / tools run, the live
+  `assistant/chunk` text (reasoning or text deltas) streams into a bubble above
+  the pet, throttled to 150 ms. The buffer keeps only the newest
+  `bubbleMaxChars` characters.
+- **Status bubbles**: on task success / error / waiting-for-user the bubble
+  switches to a fixed message (`successBubbleText` / `errorBubbleText` /
+  `confirmBubbleText`; the confirm bubble uses a highlighted blue style) and
+  hides automatically after `bubbleSeconds`.
+
+Sounds (optional) play through Windows' built-in `System.Media.SoundPlayer`
+(PowerShell child process, no extra dependency, 400 ms anti-spam):
+
+| Config | When | File location |
+|---|---|---|
+| `soundSuccess` | turn completed | `assets/sounds/` |
+| `soundError` | turn errored/aborted | `assets/sounds/` |
+| `soundConfirm` | approval asked | `assets/sounds/` |
+
+Only **PCM WAV** is supported. Put `*.wav` files under `assets/sounds/` and set
+the config key to the file name (empty string disables). See
+`assets/sounds/README.md` for details.
 
 ---
 

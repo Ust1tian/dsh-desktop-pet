@@ -86,7 +86,7 @@ interface Koffi {
  * struct/prototype types, and the single registered window class + window
  * procedure. `create()` only instantiates a window from these.
  */
-interface Win32Bindings {
+export interface Win32Bindings {
   koffi: Koffi
   POINT: any
   SIZE: any
@@ -138,6 +138,18 @@ interface Win32Bindings {
   currentOnUnhover: (() => void) | undefined
   /** Updated on each `create()` so the single wndProc reports the close choice. */
   currentOnClose: (() => void) | undefined
+  // --- 气泡窗口（GDI 文本绘制）用的绑定与进程级字体 --------------------
+  createFontW: (...args: any[]) => any
+  textOutW: (...args: any[]) => number
+  setBkMode: (...args: any[]) => number
+  setTextColor: (...args: any[]) => any
+  createSolidBrush: (...args: any[]) => any
+  fillRgn: (...args: any[]) => number
+  frameRgn: (...args: any[]) => number
+  createRoundRectRgn: (...args: any[]) => any
+  getTextExtentPoint32W: (...args: any[]) => number
+  /** 进程级字体（气泡文本用），getBindings 时创建一次。 */
+  bubbleFont: any
 }
 
 async function loadKoffi(): Promise<Koffi> {
@@ -148,7 +160,7 @@ async function loadKoffi(): Promise<Koffi> {
 let bindingsPromise: Promise<Win32Bindings> | undefined
 
 /** Build (once) and cache the process-wide Win32 bindings. */
-function getBindings(): Promise<Win32Bindings> {
+export function getBindings(): Promise<Win32Bindings> {
   if (bindingsPromise !== undefined) return bindingsPromise
   bindingsPromise = (async () => {
     const koffi = await loadKoffi()
@@ -229,6 +241,20 @@ function getBindings(): Promise<Win32Bindings> {
     const destroyMenu = user32.func('__stdcall', 'DestroyMenu', 'int32', ['void *'])
     const getCursorPos = user32.func('__stdcall', 'GetCursorPos', 'int32', ['void *'])
 
+    // --- GDI 文本绘制绑定（气泡窗口用） --------------------------------
+    const createFontW = gdi32.func('__stdcall', 'CreateFontW', 'void *', [
+      'int32', 'int32', 'int32', 'int32', 'int32',
+      'uint32', 'uint32', 'uint32', 'uint32', 'uint32', 'uint32', 'uint32', 'uint32', 'str16',
+    ])
+    const textOutW = gdi32.func('__stdcall', 'TextOutW', 'int32', ['void *', 'int32', 'int32', 'str16', 'int32'])
+    const setBkMode = gdi32.func('__stdcall', 'SetBkMode', 'int32', ['void *', 'int32'])
+    const setTextColor = gdi32.func('__stdcall', 'SetTextColor', 'uint32', ['void *', 'uint32'])
+    const createSolidBrush = gdi32.func('__stdcall', 'CreateSolidBrush', 'void *', ['uint32'])
+    const fillRgn = gdi32.func('__stdcall', 'FillRgn', 'int32', ['void *', 'void *', 'void *'])
+    const frameRgn = gdi32.func('__stdcall', 'FrameRgn', 'int32', ['void *', 'void *', 'void *', 'int32', 'int32'])
+    const createRoundRectRgn = gdi32.func('__stdcall', 'CreateRoundRectRgn', 'void *', ['int32', 'int32', 'int32', 'int32', 'int32', 'int32'])
+    const getTextExtentPoint32W = gdi32.func('__stdcall', 'GetTextExtentPoint32W', 'int32', ['void *', 'str16', 'int32', 'void *'])
+
     const TRACKMOUSEEVENT = koffi.struct('DshTrackMouseEvent', {
       cbSize: 'uint32',
       dwFlags: 'uint32',
@@ -255,6 +281,16 @@ function getBindings(): Promise<Win32Bindings> {
       currentOnHover: undefined,
       currentOnUnhover: undefined,
       currentOnClose: undefined,
+      createFontW,
+      textOutW,
+      setBkMode,
+      setTextColor,
+      createSolidBrush,
+      fillRgn,
+      frameRgn,
+      createRoundRectRgn,
+      getTextExtentPoint32W,
+      bubbleFont: undefined,
     }
 
     // Per-message scratch reused across all windows: the shared wndProc writes
@@ -380,6 +416,24 @@ function getBindings(): Promise<Win32Bindings> {
       hIconSm: null,
     })
     registerClassExW(cls)
+
+    // 进程级气泡字体：中文优先用微软雅黑，回退到系统默认 UI 字体。
+    bindings.bubbleFont = createFontW(
+      -16, // 字符高度 16px
+      0, // 宽度按字体自动
+      0, 0, // 无倾斜/旋转
+      400, // FW_NORMAL
+      0, 0, 0, // 非斜体/无下划线/无删除线
+      1, // DEFAULT_CHARSET
+      0, 0, // 默认输出/裁剪精度
+      5, // CLEARTYPE_QUALITY
+      0, // DEFAULT_PITCH | FF_DONTCARE
+      'Microsoft YaHei UI',
+    )
+    if (!bindings.bubbleFont) {
+      // 个别精简系统没有雅黑：退回默认 UI 字体（NULL 表示系统默认）。
+      bindings.bubbleFont = createFontW(-16, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, '')
+    }
 
     return bindings
   })()

@@ -75,6 +75,24 @@ export interface PetConfig {
   startSleeping: boolean
   /** Global animation speed multiplier. */
   animationSpeed: number
+  /** 气泡总开关：关闭后不显示任何文字气泡。 */
+  bubbleEnabled: boolean
+  /** 思考过程气泡最多保留的字符数（超出截断，保留最新内容）。 */
+  bubbleMaxChars: number
+  /** 结果类气泡（成功/出错/等待确认）自动隐藏前的显示秒数。 */
+  bubbleSeconds: number
+  /** 等待用户确认时气泡显示的文本。 */
+  confirmBubbleText: string
+  /** 任务完成时气泡显示的文本。 */
+  successBubbleText: string
+  /** 任务出错时气泡显示的文本。 */
+  errorBubbleText: string
+  /** 任务完成音效文件名（放在 assets/sounds/ 下，WAV 格式；留空表示不播放）。 */
+  soundSuccess: string
+  /** 任务出错音效文件名（放在 assets/sounds/ 下，WAV 格式；留空表示不播放）。 */
+  soundError: string
+  /** 需要用户确认时音效文件名（放在 assets/sounds/ 下，WAV 格式；留空表示不播放）。 */
+  soundConfirm: string
 }
 
 export const Config: z<PetConfig> = z.object({
@@ -88,6 +106,15 @@ export const Config: z<PetConfig> = z.object({
   clickThrough: z.boolean().default(false),
   startSleeping: z.boolean().default(false),
   animationSpeed: z.number().min(0.25).max(4).default(1),
+  bubbleEnabled: z.boolean().default(true),
+  bubbleMaxChars: z.natural().min(10).max(500).default(80),
+  bubbleSeconds: z.number().min(1).max(60).default(6),
+  confirmBubbleText: z.string().default('⚠ 需要你的确认'),
+  successBubbleText: z.string().default('✓ 完成！'),
+  errorBubbleText: z.string().default('✗ 出错了'),
+  soundSuccess: z.string().default(''),
+  soundError: z.string().default(''),
+  soundConfirm: z.string().default(''),
 })
 
 export const DEFAULT_CONFIG: PetConfig = {
@@ -101,4 +128,13 @@ export const DEFAULT_CONFIG: PetConfig = {
   clickThrough: false,
   startSleeping: false,
   animationSpeed: 1,
+  bubbleEnabled: true,
+  bubbleMaxChars: 80,
+  bubbleSeconds: 6,
+  confirmBubbleText: '⚠ 需要你的确认',
+  successBubbleText: '✓ 完成！',
+  errorBubbleText: '✗ 出错了',
+  soundSuccess: '',
+  soundError: '',
+  soundConfirm: '',
 }

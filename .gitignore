@@ -3,3 +3,7 @@ lib
 *.log
 .DS_Store
 .zcode/
+# 第三方图集与用户音效：版权原因不入库（README 有获取说明）
+assets/pets/deepseek/
+assets/sounds/*.wav
+assets/sounds/*.mp3
