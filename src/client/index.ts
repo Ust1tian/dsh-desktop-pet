@@ -46,7 +46,7 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
-    id: 'desktop-pet',
+    key: 'desktop-pet',
     order: 30,
     locale: NS,
     inject: () => controller.inject(),
